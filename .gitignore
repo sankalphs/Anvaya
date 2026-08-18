@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Reproducible generated artifacts (never commit large data/model caches)
+cache/
+data/processed/
+results/*.csv
+results/*.json
+results/*.md
+!results/.gitkeep
+
