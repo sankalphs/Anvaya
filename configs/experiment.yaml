@@ -1,0 +1,24 @@
+experiment:
+  name: hh-goa-msmarco-xi
+  seed: 20260818
+
+dataset:
+  repository: ai4bharat/MSMARCO-XI
+  revision: null  # resolved to and recorded as an immutable Hub commit SHA
+  language: auto  # repository default (Hindi) because MSMARCO-XI has no Konkani config
+  dev_source_split: train
+  test_source_split: validation
+  dev_queries: 1000
+  test_queries: 1000
+  sampling_acceptance_rate: 0.20
+  max_rows_scanned_multiplier: 20
+  passage_field: Translated_passages
+  query_field: query
+  output_dir: data/processed
+  retain_raw_parquet: false  # files are 0.46-3.72 GB; processed artifacts remain cached
+
+cache:
+  root: cache
+  huggingface: cache/huggingface
+  embeddings: cache/embeddings
+  indexes: cache/indexes
