@@ -11,6 +11,7 @@ from rich.table import Table
 
 from hh_goa_rag.config import load_config
 from hh_goa_rag.dataset import prepare_dataset, read_manifest
+from hh_goa_rag.embedding_ablation import run_embedding_ablation
 
 
 def _dataset_prepare(args: argparse.Namespace) -> int:
@@ -39,6 +40,13 @@ def _dataset_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _embedding_run(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    _, winner = run_embedding_ablation(config, data_dir=args.data_dir)
+    print(f"\nEmbedding winner: **{winner['winner']}**")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/experiment.yaml", type=Path)
@@ -49,6 +57,13 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--force", action="store_true")
     prepare_parser.add_argument("--json", action="store_true")
     prepare_parser.set_defaults(handler=_dataset_prepare)
+    embedding_parser = subparsers.add_parser("embedding", help="Embedding-model ablation")
+    embedding_subparsers = embedding_parser.add_subparsers(
+        dest="embedding_command", required=True
+    )
+    embedding_run = embedding_subparsers.add_parser("run", help="Run/resume all model candidates")
+    embedding_run.add_argument("--data-dir", type=Path)
+    embedding_run.set_defaults(handler=_embedding_run)
     return parser
 
 
@@ -60,4 +75,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

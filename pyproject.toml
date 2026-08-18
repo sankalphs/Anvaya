@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 experiment = [
   "chromadb>=1.0",
+  "einops>=0.8",
   "faiss-cpu>=1.10",
   "qdrant-client>=1.14",
   "sentence-transformers>=4.0",

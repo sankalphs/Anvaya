@@ -11,5 +11,12 @@ data/processed/
 results/*.csv
 results/*.json
 results/*.md
+results/runs/
 !results/.gitkeep
-
+!results/embedding_ablation.csv
+!results/embedding_winner.json
+!results/chunking_ablation.csv
+!results/chunking_winner.json
+!results/index_ablation.csv
+!results/index_winner.json
+!results/final_recommendation.md

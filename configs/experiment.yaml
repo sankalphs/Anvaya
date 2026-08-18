@@ -20,5 +20,33 @@ dataset:
 cache:
   root: cache
   huggingface: cache/huggingface
+  models: cache/models
   embeddings: cache/embeddings
   indexes: cache/indexes
+
+retrieval:
+  normalize_embeddings: true
+  top_k: 10
+  search_oversample: 20
+  warmup_queries: 20
+  baseline_chunking:
+    strategy: fixed_words
+    size: 128
+    overlap: 0
+
+embedding_ablation:
+  split: dev
+  batch_size: 32
+  indicbert_batch_size: 4
+  max_sequence_length: 512
+  dtype: bfloat16
+  models:
+    - BAAI/bge-m3
+    - intfloat/multilingual-e5-base
+    - Alibaba-NLP/gte-multilingual-base
+    - jinaai/jina-embeddings-v3
+    - ai4bharat/IndicBERT-v3-4B
+  selection_metrics:
+    - ndcg_at_10
+    - mrr_at_10
+    - recall_at_10
