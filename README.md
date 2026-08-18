@@ -39,3 +39,25 @@ Run checks with:
 python -m pytest
 ruff check .
 ```
+
+## Phase 2: embedding-model ablation
+
+```powershell
+hh-goa-ablate --config configs/experiment.yaml embedding run
+```
+
+Every candidate uses the same development queries, 128-word non-overlapping chunks, normalized
+embeddings, exact FAISS inner-product search, parent-level qrels, and top-K settings. E5 receives
+its published `query:`/`passage:` prefixes; Jina receives its published retrieval prompts and task
+adapters. IndicBERT is loaded through its model-card-prescribed bidirectional causal-LM wrapper and
+mean-pooled because the released checkpoint is not a retrieval-tuned sentence encoder.
+
+The current Transformers 5 runtime needs two recorded compatibility adapters. Alibaba's custom GTE
+implementation leaves non-persistent position and RoPE buffers uninitialized after meta-device
+loading, so they are deterministically reconstructed from the checkpoint config. Jina's pinned
+secondary implementation is stored in the project-local dynamic-module cache and receives the
+current `post_init` lifecycle call. These adapters do not change learned tensors.
+
+The winner is selected by the predeclared quality priority `nDCG@10`, `MRR@10`, `Recall@10`, with
+combined query-embedding and retrieval P50 latency only as the final tie-breaker. Results are saved
+to `results/embedding_ablation.csv`; per-run JSON and all embeddings remain in ignored local caches.
