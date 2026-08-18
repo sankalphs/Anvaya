@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any
+
+from hh_goa_rag.guardrails import ReasonCode, Route
+from hh_goa_rag.guardrails.types import STAGE_NAMES
+from hh_goa_rag.harness import FROZEN_PROMPT, FROZEN_TOP_K, VoiceRAGHarness
+
+
+@dataclass(frozen=True)
+class Context:
+    parent_id: str
+    chunk_id: str
+    text: str
+    score: float
+
+
+class FakeEmbedder:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls = 0
+        self.fail = fail
+
+    def encode_queries(self, texts: list[str]) -> tuple[list[str], dict[str, float]]:
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("embedding unavailable")
+        return texts, {}
+
+
+class FakeRetriever:
+    def __init__(self, score: float = 0.8) -> None:
+        self.calls = 0
+        self.contexts = [
+            Context(f"p-{index}", f"c-{index}", f"evidence {index}", score - index / 100)
+            for index in range(1, FROZEN_TOP_K + 1)
+        ]
+
+    def retrieve(self, _: Any) -> list[Context]:
+        self.calls += 1
+        return self.contexts
+
+
+class FakeGenerator:
+    def __init__(self, result: dict[str, object] | None = None) -> None:
+        self.calls = 0
+        self.result = result
+
+    def generate(
+        self, question: str, contexts: list[Any], *, prompt_variant: str
+    ) -> dict[str, object]:
+        self.calls += 1
+        assert prompt_variant == FROZEN_PROMPT
+        assert len(contexts) == FROZEN_TOP_K
+        if self.result is not None:
+            return self.result
+        raw = {
+            "status": "ANSWER",
+            "answer": "उत्तर",
+            "evidence_ids": ["p-1"],
+        }
+        return {
+            "status": "ok",
+            "answer_status": "ANSWER",
+            "answer": "उत्तर",
+            "evidence_ids": ["p-1"],
+            "raw_output": json.dumps(raw),
+            "diagnostics": {"schema_valid": True},
+        }
+
+
+def test_harness_returns_structured_grounded_answer() -> None:
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(), retriever=FakeRetriever(), generator=FakeGenerator()
+    )
+    response = harness.handle_text("गोल्डस्मिथ टेक्सास किस काउंटी में है")
+    value = response.to_dict()
+    assert response.route == Route.ANSWER
+    assert response.answer == "उत्तर"
+    assert response.citations == ("p-1",)
+    assert len(response.retrieved_ids) == FROZEN_TOP_K
+    assert set(value["stage_latencies_ms"]) == set(STAGE_NAMES)
+    assert value["total_latency_ms"] >= 0
+
+
+def test_input_route_short_circuits_expensive_components() -> None:
+    embedder = FakeEmbedder()
+    retriever = FakeRetriever()
+    generator = FakeGenerator()
+    harness = VoiceRAGHarness(embedder=embedder, retriever=retriever, generator=generator)
+    response = harness.handle_text("मेरे लिए बारिश पर एक प्रेम कविता लिखो")
+    assert response.route == Route.OFF_TOPIC
+    assert embedder.calls == retriever.calls == generator.calls == 0
+
+
+def test_low_retrieval_confidence_skips_generation() -> None:
+    generator = FakeGenerator()
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(), retriever=FakeRetriever(score=0.55), generator=generator
+    )
+    response = harness.handle_text("मस्तिष्क के सीटी स्कैन की कीमत क्या है")
+    assert response.route == Route.INSUFFICIENT_CONTEXT
+    assert response.reason_code == ReasonCode.RETRIEVAL_LOW_CONFIDENCE
+    assert generator.calls == 0
+
+
+def test_component_exception_fails_closed() -> None:
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(fail=True),
+        retriever=FakeRetriever(),
+        generator=FakeGenerator(),
+    )
+    response = harness.handle_text("मस्तिष्क के सीटी स्कैन की कीमत क्या है")
+    assert response.route == Route.SYSTEM_ERROR
+    assert response.reason_code == ReasonCode.SYSTEM_COMPONENT_ERROR
+
+
+@dataclass
+class FakeSTT:
+    status: str
+    transcript: str = ""
+
+    def transcribe_rest(self, _: object) -> FakeSTT:
+        return self
+
+
+def test_audio_stt_failure_has_structured_route() -> None:
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(),
+        retriever=FakeRetriever(),
+        generator=FakeGenerator(),
+        stt=FakeSTT("error"),
+    )
+    response = harness.handle_audio("missing.wav")
+    assert response.route == Route.STT_FAILURE
+    assert response.reason_code == ReasonCode.STT_PROVIDER_ERROR

@@ -36,3 +36,7 @@ results/runs/
 !results/generation_prompt_ablation.csv
 !results/generation_blinded_judgments.csv
 !results/generation_recommendation.md
+!results/guardrail_ablation.csv
+!results/guardrail_evaluation.csv
+!results/guardrail_confusion_matrix.csv
+!results/guardrail_recommendation.md
