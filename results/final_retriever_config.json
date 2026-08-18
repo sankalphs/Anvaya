@@ -1,0 +1,24 @@
+{
+  "chunk_artifact": "data\\processed\\23828c1c95c62c20\\chunks\\final-test-3b19f7581e6e195f.jsonl",
+  "chunking": {
+    "max_words": 128,
+    "name": "sentence_based",
+    "strategy": "sentence"
+  },
+  "class": "hh_goa_rag.retriever.ParentFaissRetriever",
+  "index": {
+    "ef_construction": 200,
+    "ef_search": 128,
+    "engine": "faiss",
+    "index_type": "hnsw",
+    "m": 32,
+    "name": "faiss_hnsw"
+  },
+  "index_artifact": "cache\\indexes\\final\\3b19f7581e6e195f\\retriever.faiss",
+  "model": "BAAI/bge-m3",
+  "model_cache_path": "cache\\models\\BAAI__bge-m3--5617a9f61b02",
+  "model_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+  "normalization_method": "float32_l2_v1",
+  "search_oversample": 20,
+  "top_k": 10
+}
