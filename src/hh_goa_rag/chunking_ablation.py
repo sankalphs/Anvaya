@@ -212,6 +212,7 @@ def run_chunking_ablation(
                 "split": split,
                 "index": "faiss.IndexFlatIP",
                 "normalized_embeddings": True,
+                "normalization_method": retrieval["normalization_method"],
                 "corpus_chunks": len(chunks),
                 "avg_chunks_per_parent": len(chunks) / len(corpus),
                 **quality,

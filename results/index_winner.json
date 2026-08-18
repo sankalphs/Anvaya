@@ -1,0 +1,69 @@
+{
+  "backend_config": {
+    "ef_construction": 200,
+    "ef_search": 128,
+    "engine": "faiss",
+    "index_type": "hnsw",
+    "m": 32,
+    "name": "faiss_hnsw"
+  },
+  "chunking_config": {
+    "max_words": 128,
+    "name": "sentence_based",
+    "strategy": "sentence"
+  },
+  "chunking_strategy": "sentence_based",
+  "dataset_artifact": "data\\processed\\23828c1c95c62c20",
+  "embedding_model": "BAAI/bge-m3",
+  "latency_tiebreakers_in_priority_order": [
+    "retrieval_p95_ms",
+    "retrieval_p50_ms",
+    "index_size_bytes"
+  ],
+  "metrics": {
+    "backend": "faiss_hnsw",
+    "backend_config": "{\"ef_construction\": 200, \"ef_search\": 128, \"engine\": \"faiss\", \"index_type\": \"hnsw\", \"m\": 32, \"name\": \"faiss_hnsw\"}",
+    "chroma_version": "1.5.9",
+    "chunking": "sentence_based",
+    "chunking_config": "{\"max_words\": 128, \"name\": \"sentence_based\", \"strategy\": \"sentence\"}",
+    "corpus_vectors": 10407,
+    "cosine_equivalent": true,
+    "embedding_dimension": 1024,
+    "engine": "faiss",
+    "evaluated_queries": 1000.0,
+    "faiss_version": "1.13.2",
+    "index_artifact": "cache\\indexes\\backends\\0ece918bb337d214\\faiss_hnsw.faiss",
+    "index_ram_bytes": 45456054,
+    "index_size_bytes": 45456054,
+    "indexing_time_ms": 303.8167,
+    "model": "BAAI/bge-m3",
+    "model_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "mrr_at_10": 0.5072710317460318,
+    "ndcg_at_10": 0.5908195562534938,
+    "normalization_method": "float32_l2_v1",
+    "normalized_embeddings": true,
+    "process_rss_delta_bytes": 60395520,
+    "qdrant_client_version": "1.19.0",
+    "recall_at_1": 0.32008333333333333,
+    "recall_at_10": 0.8625,
+    "recall_at_3": 0.6159166666666668,
+    "recall_at_5": 0.7371666666666666,
+    "retrieval_mean_ms": 0.3379216,
+    "retrieval_p100_ms": 0.6862,
+    "retrieval_p50_ms": 0.3425,
+    "retrieval_p70_ms": 0.37606,
+    "retrieval_p95_ms": 0.4394799999999999,
+    "seed": 20260818,
+    "split": "dev",
+    "status": "ok"
+  },
+  "model_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+  "seed": 20260818,
+  "selection_metrics_in_priority_order": [
+    "ndcg_at_10",
+    "mrr_at_10",
+    "recall_at_10"
+  ],
+  "stage": "index_ablation",
+  "winner": "faiss_hnsw"
+}

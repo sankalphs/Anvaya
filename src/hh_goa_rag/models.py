@@ -232,7 +232,9 @@ class EmbeddingModel:
             show_progress_bar=show_progress,
             **kwargs,
         )
-        return np.asarray(result, dtype=np.float32)
+        vectors = np.asarray(result, dtype=np.float32)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        return np.ascontiguousarray(vectors / norms, dtype=np.float32)
 
     def _encode_indic(
         self, texts: list[str], *, batch_size: int, show_progress: bool

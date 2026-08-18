@@ -77,3 +77,24 @@ embeddings and exact FAISS inner-product search.
 The winner is selected by the same quality-first priority as Phase 2, with retrieval P50 latency
 only as a final tie-breaker. The comparison is saved to `results/chunking_ablation.csv` and the
 machine-readable selected configuration to `results/chunking_winner.json`.
+
+All vectors receive a final float32 L2 normalization at the shared retrieval boundary. This
+corrects the small unit-norm drift introduced when a model performs its internal normalization in
+bfloat16, and ensures inner product is cosine-equivalent for every experiment and backend.
+
+## Phase 4: index and local-storage ablation
+
+```powershell
+hh-goa-ablate --config configs/experiment.yaml index run
+```
+
+This stage reuses the exact winning corpus and query vectors; it does not re-embed text. It compares
+FAISS FlatIP, HNSW (`M=32`, `efConstruction=200`, `efSearch=128`), IVF-Flat (`nlist=128`,
+`nprobe=16`), exact Qdrant embedded/local cosine search, and Chroma local HNSW cosine search
+(`M=32`, `efConstruction=200`, `efSearch=128`, eight threads). Each backend is warmed up before
+timing 1,000 individual queries, and reports P50/P70/P95/P100 latency, indexing time, process RAM
+delta, estimated resident index size, and persistent disk size.
+
+The selection remains quality-first (`nDCG@10`, `MRR@10`, `Recall@10`), followed only on ties by
+P95 latency, P50 latency, and disk size. Results are saved to `results/index_ablation.csv`; the
+selected backend and exact configuration are saved to `results/index_winner.json`.
