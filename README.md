@@ -3,7 +3,8 @@
 Experimental retrieval stage for the HH Goa Voice-RAG project. This repository selects an
 embedding model, chunking strategy, and vector index using a fixed, leakage-safe evaluation
 protocol on [`ai4bharat/MSMARCO-XI`](https://huggingface.co/datasets/ai4bharat/MSMARCO-XI).
-It intentionally contains no LLM generation, STT, frontend, or final RAG application.
+The retrieval stack is now frozen. The repository additionally contains a Sarvam-only STT
+evaluation stage, but no LLM generation, frontend, TTS, deployment, or final RAG application.
 
 ## Environment
 
@@ -113,5 +114,34 @@ and contain this project's exact `.hh_goa_model.json` ownership marker. The winn
 cache outside that directory are preserved.
 
 The reusable `hh_goa_rag.retriever.ParentFaissRetriever` loads the persisted index and chunk mapping
-and accepts query embeddings, providing the retrieval boundary for the later Voice → STT → RAG
-pipeline without adding any speech, generation, or frontend components in this experiment.
+and accepts query embeddings. The later STT evaluation uses that boundary without changing the
+selected model, chunking, index, or retrieval parameters.
+
+## Phase 6: real Sarvam STT evaluation
+
+Install the STT and development extras:
+
+```powershell
+python -m pip install -e ".[experiment,stt,dev]"
+```
+
+Copy `.env.example` to the ignored `.env` file and set `SARVAM_API_KEY`. The provider and
+configuration are fixed to Sarvam AI `saaras:v3` with `mode="transcribe"`; no alternate STT
+provider is implemented. List microphone devices and record the pending real-human samples with:
+
+```powershell
+python eval/record_audio.py --list-devices
+python eval/record_audio.py --all-pending --speaker-id speaker-01 --device 5
+```
+
+The recorder writes 16 kHz mono PCM WAV files under `eval/audio` and atomically marks manifest rows
+ready. Pending or missing audio is never scored. Once recordings are ready, run both Sarvam
+integration modes and the frozen-retriever impact evaluation:
+
+```powershell
+python eval/evaluate_stt.py --manifest eval/stt_manifest.jsonl --run-id sarvam-real-001 --device auto
+```
+
+This produces per-sample STT results, gold-text versus transcript retrieval degradation, raw run
+observations, and a data-driven REST-versus-streaming recommendation. The sealed test remains
+untouched.
