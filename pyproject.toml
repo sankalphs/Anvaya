@@ -35,6 +35,10 @@ stt = [
   "sarvamai==0.1.30",
   "sounddevice>=0.5,<0.6",
 ]
+generation = [
+  "httpx>=0.28,<1",
+  "python-dotenv>=1.2",
+]
 dev = [
   "pytest>=8.3",
   "ruff>=0.11",

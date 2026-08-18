@@ -1,0 +1,5 @@
+﻿status,reason,model,top_k
+PENDING_BLINDED_MODEL_REVIEW,A winning model cannot be selected before human quality scores are entered.,,1
+PENDING_BLINDED_MODEL_REVIEW,A winning model cannot be selected before human quality scores are entered.,,3
+PENDING_BLINDED_MODEL_REVIEW,A winning model cannot be selected before human quality scores are entered.,,5
+PENDING_BLINDED_MODEL_REVIEW,A winning model cannot be selected before human quality scores are entered.,,10

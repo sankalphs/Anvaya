@@ -1,0 +1,4 @@
+﻿status,reason,model,top_k,prompt_variant
+PENDING_BLINDED_MODEL_REVIEW,A winning model cannot be selected before human quality scores are entered.,,,strict_context_only
+PENDING_BLINDED_MODEL_REVIEW,A winning model cannot be selected before human quality scores are entered.,,,context_only_refusal
+PENDING_BLINDED_MODEL_REVIEW,A winning model cannot be selected before human quality scores are entered.,,,structured_evidence_ids
