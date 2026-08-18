@@ -1,0 +1,49 @@
+{
+  "dataset_artifact": "data\\processed\\23828c1c95c62c20",
+  "embedding_model": "BAAI/bge-m3",
+  "metrics": {
+    "avg_chunks_per_parent": 1.0496217851739789,
+    "chunk_artifact": "data\\processed\\23828c1c95c62c20\\chunks\\chunking-sentence_based-6be0c7c6cf80979a.jsonl",
+    "corpus_chunks": 10407,
+    "corpus_embedding_ms_per_chunk": 0.7284940136446623,
+    "corpus_embedding_time_ms": 7581.4372,
+    "embedding_cache_path": "cache\\embeddings\\chunking\\bd303898397761a2",
+    "evaluated_queries": 1000.0,
+    "index": "faiss.IndexFlatIP",
+    "index_ram_bytes": 42627072,
+    "index_size_bytes": 42627117,
+    "indexing_time_ms": 10.4759,
+    "model": "BAAI/bge-m3",
+    "model_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "mrr_at_10": 0.5074146825396826,
+    "ndcg_at_10": 0.5908696708690395,
+    "normalized_embeddings": true,
+    "process_rss_delta_bytes": 42631168,
+    "query_embedding_p50_ms": 9.1646,
+    "recall_at_1": 0.31908333333333333,
+    "recall_at_10": 0.8625833333333333,
+    "recall_at_3": 0.6164166666666667,
+    "recall_at_5": 0.7346666666666666,
+    "retrieval_mean_ms": 1.7890039000000002,
+    "retrieval_p50_ms": 1.7909,
+    "retrieval_p95_ms": 1.8938099999999998,
+    "split": "dev",
+    "status": "ok",
+    "strategy": "sentence_based",
+    "strategy_config": "{\"max_words\": 128, \"name\": \"sentence_based\", \"strategy\": \"sentence\"}"
+  },
+  "model_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+  "seed": 20260818,
+  "selection_metrics_in_priority_order": [
+    "ndcg_at_10",
+    "mrr_at_10",
+    "recall_at_10"
+  ],
+  "stage": "chunking_ablation",
+  "strategy_config": {
+    "max_words": 128,
+    "name": "sentence_based",
+    "strategy": "sentence"
+  },
+  "winner": "sentence_based"
+}

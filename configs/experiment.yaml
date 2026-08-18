@@ -50,3 +50,33 @@ embedding_ablation:
     - ndcg_at_10
     - mrr_at_10
     - recall_at_10
+
+chunking_ablation:
+  split: dev
+  batch_size: 32
+  strategies:
+    - name: fixed_size
+      strategy: fixed_words
+      size: 128
+      overlap: 0
+    - name: overlapping
+      strategy: fixed_words
+      size: 128
+      overlap: 32
+    - name: sentence_based
+      strategy: sentence
+      max_words: 128
+    - name: semantic
+      strategy: semantic
+      min_words: 40
+      max_words: 160
+      similarity_threshold: 0.65
+    - name: parent_child
+      strategy: parent_child
+      child_size: 64
+      child_overlap: 16
+      include_parent: true
+  selection_metrics:
+    - ndcg_at_10
+    - mrr_at_10
+    - recall_at_10
