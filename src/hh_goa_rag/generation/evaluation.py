@@ -247,6 +247,11 @@ def aggregate_model_rows(observations: Sequence[dict[str, Any]]) -> list[dict[st
         latency = percentile_summary(latencies)
         ttft = percentile_summary(ttfts)
         output_token_distribution = percentile_summary([float(value) for value in tokens])
+        prompt_tokens = [
+            int(row["prompt_tokens"])
+            for row in selected
+            if row.get("prompt_tokens") is not None
+        ]
         rows.append(
             {
                 "provider": "sarvam",
@@ -272,6 +277,7 @@ def aggregate_model_rows(observations: Sequence[dict[str, Any]]) -> list[dict[st
                 "ttft_p95_ms": ttft.get("p95_ms"),
                 "ttft_p100_ms": ttft.get("p100_ms"),
                 "mean_output_tokens": statistics.fmean(tokens) if tokens else None,
+                "mean_prompt_tokens": statistics.fmean(prompt_tokens) if prompt_tokens else None,
                 "output_tokens_p50": output_token_distribution.get("p50_ms"),
                 "output_tokens_p95": output_token_distribution.get("p95_ms"),
                 "output_tokens_max": output_token_distribution.get("p100_ms"),
@@ -319,7 +325,24 @@ def aggregate_configuration_rows(
         tokens = [
             int(row["output_tokens"]) for row in selected if row.get("output_tokens") is not None
         ]
+        prompt_tokens = [
+            int(row["prompt_tokens"])
+            for row in selected
+            if row.get("prompt_tokens") is not None
+        ]
         diagnostics = [row.get("diagnostics", {}) for row in selected]
+        citation_validity = [
+            bool(diagnostic.get("schema_valid"))
+            and not diagnostic.get("missing_citation")
+            and not diagnostic.get("unknown_evidence_ids")
+            for diagnostic in diagnostics
+        ]
+        context_available = [
+            row for row in successful if bool(row.get("diagnostics", {}).get("qrel_retrieved"))
+        ]
+        context_missing = [
+            row for row in successful if not bool(row.get("diagnostics", {}).get("qrel_retrieved"))
+        ]
         rows.append(
             {
                 "status": "PENDING_BLINDED_REVIEW",
@@ -340,11 +363,51 @@ def aggregate_configuration_rows(
                 "ttft_p95_ms": ttft.get("p95_ms"),
                 "ttft_p100_ms": ttft.get("p100_ms"),
                 "mean_output_tokens": statistics.fmean(tokens) if tokens else None,
+                "mean_prompt_tokens": statistics.fmean(prompt_tokens) if prompt_tokens else None,
+                "prompt_tokens_min": min(prompt_tokens) if prompt_tokens else None,
+                "prompt_tokens_max": max(prompt_tokens) if prompt_tokens else None,
                 "schema_valid_rate": _mean_bool(diagnostics, "schema_valid"),
+                "grounded_citation_validity_rate": (
+                    statistics.fmean(citation_validity) if citation_validity else None
+                ),
                 "missing_citation_rate": _mean_bool(diagnostics, "missing_citation"),
                 "unknown_citation_rate": _mean_nonempty(diagnostics, "unknown_evidence_ids"),
                 "novel_number_diagnostic_rate": _mean_nonempty(diagnostics, "novel_numbers"),
                 "retrieved_qrel_rate": _mean_bool(diagnostics, "qrel_retrieved"),
+                "insufficient_context_rate": (
+                    sum(row.get("answer_status") == "INSUFFICIENT_CONTEXT" for row in successful)
+                    / len(successful)
+                    if successful
+                    else None
+                ),
+                "answer_when_context_available_rate": (
+                    sum(row.get("answer_status") == "ANSWER" for row in context_available)
+                    / len(context_available)
+                    if context_available
+                    else None
+                ),
+                "refusal_when_context_missing_rate": (
+                    sum(
+                        row.get("answer_status") == "INSUFFICIENT_CONTEXT"
+                        for row in context_missing
+                    )
+                    / len(context_missing)
+                    if context_missing
+                    else None
+                ),
+                "appropriate_context_behavior_rate": (
+                    sum(
+                        (
+                            row.get("answer_status") == "ANSWER"
+                            if row.get("diagnostics", {}).get("qrel_retrieved")
+                            else row.get("answer_status") == "INSUFFICIENT_CONTEXT"
+                        )
+                        for row in successful
+                    )
+                    / len(successful)
+                    if successful
+                    else None
+                ),
                 "human_correctness": "PENDING_BLINDED_REVIEW",
                 "human_relevance": "PENDING_BLINDED_REVIEW",
                 "human_faithfulness": "PENDING_BLINDED_REVIEW",
@@ -360,14 +423,29 @@ def write_blinded_judgments(
     mapping_path: Path,
     *,
     seed: int = 20260818,
+    experiment_id: str = "",
 ) -> None:
     contexts = {row["case_id"]: row for row in context_rows}
+    prior_scores: dict[str, dict[str, str]] = {}
+    if output_path.exists():
+        with output_path.open(encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                prior_scores[row["blind_output_id"]] = {
+                    key: row.get(key, "")
+                    for key in (
+                        "human_correctness_1_to_5",
+                        "human_relevance_1_to_5",
+                        "human_faithfulness_1_to_5",
+                        "human_notes",
+                        "reviewer_type",
+                    )
+                }
     blind_rows: list[dict[str, Any]] = []
     mapping: list[dict[str, str]] = []
     for observation in observations:
         case = contexts[observation["case_id"]]
         identity = (
-            f"{seed}:{observation['case_id']}:{observation['model']}:"
+            f"{seed}:{experiment_id}:{observation['case_id']}:{observation['model']}:"
             f"{observation['top_k']}:{observation['prompt_variant']}"
         )
         blind_id = "g-" + hashlib.sha256(identity.encode()).hexdigest()[:12]
@@ -378,10 +456,10 @@ def write_blinded_judgments(
                 "model": observation["model"],
                 "top_k": str(observation["top_k"]),
                 "prompt_variant": observation["prompt_variant"],
+                "experiment_id": experiment_id,
             }
         )
-        blind_rows.append(
-            {
+        blind_row = {
                 "blind_output_id": blind_id,
                 "rubric_version": HUMAN_RUBRIC_VERSION,
                 "case_id": observation["case_id"],
@@ -403,8 +481,10 @@ def write_blinded_judgments(
                 "human_relevance_1_to_5": "",
                 "human_faithfulness_1_to_5": "",
                 "human_notes": "",
+                "reviewer_type": "human",
             }
-        )
+        blind_row.update(prior_scores.get(blind_id, {}))
+        blind_rows.append(blind_row)
     random.Random(seed).shuffle(blind_rows)
     write_csv(output_path, blind_rows)
     write_jsonl(mapping_path, mapping)
