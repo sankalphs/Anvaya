@@ -9,6 +9,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from hh_goa_rag.chunking_ablation import run_chunking_ablation
 from hh_goa_rag.config import load_config
 from hh_goa_rag.dataset import prepare_dataset, read_manifest
 from hh_goa_rag.embedding_ablation import run_embedding_ablation
@@ -47,6 +48,13 @@ def _embedding_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _chunking_run(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    _, winner = run_chunking_ablation(config, data_dir=args.data_dir)
+    print(f"\nChunking winner: **{winner['winner']}**")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/experiment.yaml", type=Path)
@@ -64,6 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
     embedding_run = embedding_subparsers.add_parser("run", help="Run/resume all model candidates")
     embedding_run.add_argument("--data-dir", type=Path)
     embedding_run.set_defaults(handler=_embedding_run)
+    chunking_parser = subparsers.add_parser("chunking", help="Chunking-strategy ablation")
+    chunking_subparsers = chunking_parser.add_subparsers(
+        dest="chunking_command", required=True
+    )
+    chunking_run = chunking_subparsers.add_parser("run", help="Run/resume all chunk candidates")
+    chunking_run.add_argument("--data-dir", type=Path)
+    chunking_run.set_defaults(handler=_chunking_run)
     return parser
 
 

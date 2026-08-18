@@ -61,3 +61,19 @@ current `post_init` lifecycle call. These adapters do not change learned tensors
 The winner is selected by the predeclared quality priority `nDCG@10`, `MRR@10`, `Recall@10`, with
 combined query-embedding and retrieval P50 latency only as the final tie-breaker. Results are saved
 to `results/embedding_ablation.csv`; per-run JSON and all embeddings remain in ignored local caches.
+
+## Phase 3: chunking ablation
+
+```powershell
+hh-goa-ablate --config configs/experiment.yaml chunking run
+```
+
+The winning embedding model is held fixed while fixed-size, overlapping, sentence-based,
+semantic, and parent-child strategies are compared on the same development queries and
+parent-level qrels. Semantic boundaries use adjacent normalized sentence-embedding similarity
+with a predeclared threshold; no qrels are used to tune boundaries. All strategies use normalized
+embeddings and exact FAISS inner-product search.
+
+The winner is selected by the same quality-first priority as Phase 2, with retrieval P50 latency
+only as a final tie-breaker. The comparison is saved to `results/chunking_ablation.csv` and the
+machine-readable selected configuration to `results/chunking_winner.json`.
