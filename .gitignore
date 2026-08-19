@@ -45,3 +45,8 @@ results/runs/
 !results/e2e_category_breakdown.csv
 !results/e2e_failure_analysis.csv
 !results/e2e_recommendation.md
+!results/latency_autopsy.csv
+!results/stt_latency_ablation.csv
+!results/generation_latency_ablation.csv
+!results/fast_path_ablation.csv
+!results/latency_optimization_summary.md
