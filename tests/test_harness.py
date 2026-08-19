@@ -80,7 +80,12 @@ def test_harness_returns_structured_grounded_answer() -> None:
     assert response.answer == "उत्तर"
     assert response.citations == ("p-1",)
     assert len(response.retrieved_ids) == FROZEN_TOP_K
-    assert set(value["stage_latencies_ms"]) == set(STAGE_NAMES)
+    assert set(STAGE_NAMES).issubset(value["stage_latencies_ms"])
+    assert {"query_embedding", "vector_search", "guardrails", "total_end_to_end"}.issubset(
+        value["stage_latencies_ms"]
+    )
+    assert value["metadata"]["grounding"]["valid"] is True
+    assert len(value["metadata"]["retrieved"]) == FROZEN_TOP_K
     assert value["total_latency_ms"] >= 0
 
 
@@ -120,6 +125,7 @@ def test_component_exception_fails_closed() -> None:
 class FakeSTT:
     status: str
     transcript: str = ""
+    error_code: str | None = None
 
     def transcribe_rest(self, _: object) -> FakeSTT:
         return self
@@ -135,3 +141,15 @@ def test_audio_stt_failure_has_structured_route() -> None:
     response = harness.handle_audio("missing.wav")
     assert response.route == Route.STT_FAILURE
     assert response.reason_code == ReasonCode.STT_PROVIDER_ERROR
+
+
+def test_invalid_audio_has_specific_structured_reason() -> None:
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(),
+        retriever=FakeRetriever(),
+        generator=FakeGenerator(),
+        stt=FakeSTT("error", error_code="invalid_audio"),
+    )
+    response = harness.handle_audio("empty.wav")
+    assert response.route == Route.STT_FAILURE
+    assert response.reason_code == ReasonCode.STT_INVALID_AUDIO

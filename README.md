@@ -1,10 +1,12 @@
-# HH Goa retrieval ablation
+# HH Goa Voice-RAG evaluation
 
-Experimental retrieval stage for the HH Goa Voice-RAG project. This repository selects an
-embedding model, chunking strategy, and vector index using a fixed, leakage-safe evaluation
-protocol on [`ai4bharat/MSMARCO-XI`](https://huggingface.co/datasets/ai4bharat/MSMARCO-XI).
-The retrieval stack is now frozen. The repository additionally contains a Sarvam-only STT
-evaluation stage, but no LLM generation, frontend, TTS, deployment, or final RAG application.
+Evaluation and integration repository for the HH Goa Voice-RAG project. The complete selected stack
+is frozen as Sarvam Saaras v3 STT → BGE-M3 → sentence chunks capped at 128 words → FAISS HNSW
+(`M=32`, `efConstruction=200`, `efSearch=128`) → deterministic guardrails → `sarvam-105b` →
+Top-10 → `strict_context_only` → deterministic grounding validation.
+
+The repository contains retrieval, STT, generation, routing/guardrail, and complete-pipeline
+evaluation harnesses. It does not include a frontend, TTS, deployment, or production service.
 
 ## Environment
 
@@ -145,3 +147,52 @@ python eval/evaluate_stt.py --manifest eval/stt_manifest.jsonl --run-id sarvam-r
 This produces per-sample STT results, gold-text versus transcript retrieval degradation, raw run
 observations, and a data-driven REST-versus-streaming recommendation. The sealed test remains
 untouched.
+
+## Phase 7: generation selection
+
+The generation evaluation uses a single cached gold-query Top-10 retrieval snapshot so model,
+Top-K, and prompt comparisons do not alter STT or retrieval. The selected configuration is
+`sarvam-105b` → Top-10 → `strict_context_only`. Its measured generation-only latency was
+P50/P70/P95/P100 1580/1966/7009/11849 ms, so this stack cannot satisfy a complete-pipeline target
+below 200 ms. See `results/generation_recommendation.md` for the blinded qualitative review and
+ablation details.
+
+## Phase 8: deterministic guardrails
+
+`hh_goa_rag.guardrails` routes structured outcomes among `ANSWER`, `INSUFFICIENT_CONTEXT`,
+`OFF_TOPIC`, `UNSAFE`, `STT_FAILURE`, and `SYSTEM_ERROR`. Input policy checks run before retrieval;
+the frozen evidence rule uses Top-1 ≥ 0.67 or the fixed Top-K consistency rescue; generation output
+must pass schema and retrieved-citation validation. These rules add no LLM judge call.
+
+The 24-case development routing set scored 24/24 with no false answers or false refusals and
+guardrail-only P50/P70/P95/P100 latency of approximately 0.020/0.022/0.034/0.069 ms. These are
+development-only threshold-selection results, not real-voice E2E measurements. See
+`results/guardrail_recommendation.md`.
+
+## Phase 9: complete Voice-RAG integration
+
+The `hh_goa_rag.harness.VoiceRAGHarness` implements:
+
+```text
+audio
+→ Sarvam STT
+→ input and policy guardrails
+→ BGE-M3 query embedding
+→ FAISS Top-10 vector search
+→ evidence guardrail
+→ sarvam-105b generation
+→ grounding validation
+→ structured response with provenance and stage timings
+```
+
+Run the complete evaluator with:
+
+```powershell
+python eval/evaluate_e2e.py
+```
+
+The 24-case recording manifest currently has 0/24 real recordings, so formal real-voice completion,
+quality, WER, retrieval-degradation, latency-budget, category, and failure metrics are explicitly
+pending. `results/e2e_*.csv` contains blank pending rows rather than synthetic values. Text-path
+integration and ten failure-mode checks are recorded separately as smoke tests and never enter the
+formal latency tables. See `results/e2e_recommendation.md`.

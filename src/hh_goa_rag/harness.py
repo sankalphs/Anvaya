@@ -137,17 +137,30 @@ class VoiceRAGHarness:
                 operation_started,
             )
         stages["stt"] = _elapsed_ms(started)
+        stt_metadata = {
+            "provider": _field(result, "provider", "sarvam"),
+            "model": _field(result, "model", "saaras:v3"),
+            "status": _field(result, "status", "error"),
+            "error_code": _field(result, "error_code", None),
+        }
         if _field(result, "status", "error") != "ok":
+            stt_reason = (
+                ReasonCode.STT_INVALID_AUDIO
+                if _field(result, "error_code", None) == "invalid_audio"
+                else ReasonCode.STT_PROVIDER_ERROR
+            )
             return _response(
                 Route.STT_FAILURE,
-                ReasonCode.STT_PROVIDER_ERROR,
+                stt_reason,
                 stages,
                 operation_started,
+                metadata={"stt": stt_metadata},
             )
         return self._handle_transcript(
             _field(result, "transcript", ""),
             operation_started=operation_started,
             stages=stages,
+            base_metadata={"stt": stt_metadata},
         )
 
     def close(self) -> None:
@@ -161,12 +174,26 @@ class VoiceRAGHarness:
         *,
         operation_started: int,
         stages: dict[str, float] | None = None,
+        base_metadata: dict[str, Any] | None = None,
     ) -> GuardrailResponse:
         stages = stages or _empty_stages()
+        metadata = dict(base_metadata or {})
+        decision_trace: list[dict[str, Any]] = []
+        metadata["decision_trace"] = decision_trace
         try:
             started = time.perf_counter_ns()
             validation = validate_transcript(transcript)
             stages["input_validation"] = _elapsed_ms(started)
+            decision_trace.append(
+                {
+                    "stage": "input_validation",
+                    "allow": validation.allow,
+                    "route": validation.route.value if validation.route else None,
+                    "reason_code": (
+                        validation.reason_code.value if validation.reason_code else None
+                    ),
+                }
+            )
             if not validation.allow:
                 return _response(
                     validation.route or Route.STT_FAILURE,
@@ -174,11 +201,20 @@ class VoiceRAGHarness:
                     stages,
                     operation_started,
                     transcript=validation.normalized_transcript,
+                    metadata=metadata,
                 )
 
             started = time.perf_counter_ns()
             route = route_input(validation.normalized_transcript)
             stages["route_check"] = _elapsed_ms(started)
+            decision_trace.append(
+                {
+                    "stage": "route_check",
+                    "allow": route.allow,
+                    "route": route.route.value if route.route else None,
+                    "reason_code": route.reason_code.value if route.reason_code else None,
+                }
+            )
             if not route.allow:
                 return _response(
                     route.route or Route.OFF_TOPIC,
@@ -186,6 +222,7 @@ class VoiceRAGHarness:
                     stages,
                     operation_started,
                     transcript=route.normalized_transcript,
+                    metadata=metadata,
                 )
 
             started = time.perf_counter_ns()
@@ -195,10 +232,30 @@ class VoiceRAGHarness:
             contexts = self.retriever.retrieve(vectors[0])
             stages["retrieval"] = _elapsed_ms(started)
             retrieved_ids = tuple(str(_field(item, "parent_id", "")) for item in contexts)
+            metadata["retrieved"] = [
+                {
+                    "rank": index,
+                    "parent_id": str(_field(item, "parent_id", "")),
+                    "score": float(_field(item, "score", 0.0)),
+                }
+                for index, item in enumerate(contexts, start=1)
+            ]
 
             started = time.perf_counter_ns()
             sufficiency = evidence_sufficiency(contexts)
             stages["evidence_guardrail"] = _elapsed_ms(started)
+            metadata["evidence_decision"] = sufficiency.to_dict()
+            decision_trace.append(
+                {
+                    "stage": "evidence_guardrail",
+                    "allow": sufficiency.sufficient,
+                    "route": None if sufficiency.sufficient else Route.INSUFFICIENT_CONTEXT.value,
+                    "reason_code": (
+                        sufficiency.reason_code.value if sufficiency.reason_code else None
+                    ),
+                    "decision_rule": sufficiency.decision_rule,
+                }
+            )
             if not sufficiency.sufficient:
                 return _response(
                     Route.INSUFFICIENT_CONTEXT,
@@ -207,7 +264,7 @@ class VoiceRAGHarness:
                     operation_started,
                     transcript=validation.normalized_transcript,
                     retrieved_ids=retrieved_ids,
-                    metadata={"retrieval_signals": sufficiency.to_dict()},
+                    metadata=metadata,
                 )
 
             generation_contexts = [
@@ -230,6 +287,24 @@ class VoiceRAGHarness:
             started = time.perf_counter_ns()
             grounding = validate_generation(generated, generation_contexts)
             stages["grounding_validation"] = _elapsed_ms(started)
+            metadata["generation"] = {
+                "provider_status": _field(generated, "status", "error"),
+                "answer_status": _field(generated, "answer_status", None),
+                "error_code": _field(generated, "error_code", None),
+            }
+            metadata["grounding"] = {
+                "valid": grounding.valid,
+                "route": grounding.route.value,
+                "reason_code": grounding.reason_code.value,
+            }
+            decision_trace.append(
+                {
+                    "stage": "grounding_validation",
+                    "allow": grounding.valid,
+                    "route": grounding.route.value,
+                    "reason_code": grounding.reason_code.value,
+                }
+            )
             return _response(
                 grounding.route,
                 grounding.reason_code,
@@ -239,7 +314,7 @@ class VoiceRAGHarness:
                 answer=grounding.answer,
                 retrieved_ids=retrieved_ids,
                 citations=grounding.citations,
-                metadata={"retrieval_signals": sufficiency.to_dict()},
+                metadata=metadata,
             )
         except Exception:
             return _response(
@@ -248,6 +323,7 @@ class VoiceRAGHarness:
                 stages,
                 operation_started,
                 transcript=transcript if isinstance(transcript, str) else "",
+                metadata=metadata,
             )
 
 
@@ -279,14 +355,32 @@ def _response(
     citations: tuple[str, ...] = (),
     metadata: dict[str, Any] | None = None,
 ) -> GuardrailResponse:
+    total_latency = _elapsed_ms(operation_started)
+    stage_values = {name: float(stages.get(name, 0.0)) for name in STAGE_NAMES}
+    stage_values.update(
+        {
+            "query_embedding": stage_values["embedding"],
+            "vector_search": stage_values["retrieval"],
+            "guardrails": sum(
+                stage_values[name]
+                for name in (
+                    "input_validation",
+                    "route_check",
+                    "evidence_guardrail",
+                    "grounding_validation",
+                )
+            ),
+            "total_end_to_end": total_latency,
+        }
+    )
     return GuardrailResponse(
         route=route,
         answer=answer,
         retrieved_ids=retrieved_ids,
         citations=citations,
         reason_code=reason_code,
-        stage_latencies_ms={name: float(stages.get(name, 0.0)) for name in STAGE_NAMES},
-        total_latency_ms=_elapsed_ms(operation_started),
+        stage_latencies_ms=stage_values,
+        total_latency_ms=total_latency,
         transcript=transcript,
         metadata=metadata or {},
     )
