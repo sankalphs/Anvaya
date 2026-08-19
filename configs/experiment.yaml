@@ -26,6 +26,7 @@ cache:
 
 retrieval:
   normalize_embeddings: true
+  normalization_method: float32_l2_v1
   top_k: 10
   search_oversample: 20
   warmup_queries: 20
@@ -76,6 +77,39 @@ chunking_ablation:
       child_size: 64
       child_overlap: 16
       include_parent: true
+  selection_metrics:
+    - ndcg_at_10
+    - mrr_at_10
+    - recall_at_10
+
+index_ablation:
+  split: dev
+  backends:
+    - name: faiss_flat_ip
+      engine: faiss
+      index_type: flat_ip
+    - name: faiss_hnsw
+      engine: faiss
+      index_type: hnsw
+      m: 32
+      ef_construction: 200
+      ef_search: 128
+    - name: faiss_ivf_flat
+      engine: faiss
+      index_type: ivf_flat
+      nlist: 128
+      nprobe: 16
+    - name: qdrant_local
+      engine: qdrant_local
+      distance: cosine
+      search_mode: exact  # Qdrant embedded/local mode is an exact in-process implementation
+    - name: chroma_local
+      engine: chroma_local
+      distance: cosine
+      m: 32
+      ef_construction: 200
+      ef_search: 128
+      num_threads: 8
   selection_metrics:
     - ndcg_at_10
     - mrr_at_10

@@ -13,10 +13,19 @@ import psutil
 from hh_goa_rag.metrics import latency_percentiles
 
 
+def l2_normalize(embeddings: np.ndarray) -> np.ndarray:
+    """Return contiguous float32 unit vectors, including after low-precision inference."""
+    vectors = np.asarray(embeddings, dtype=np.float32)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    if np.any(norms == 0):
+        raise ValueError("Cannot normalize a zero embedding")
+    return np.ascontiguousarray(vectors / norms, dtype=np.float32)
+
+
 def build_flat_ip(
     embeddings: np.ndarray, index_path: str | Path
 ) -> tuple[faiss.IndexFlatIP, dict[str, int | float]]:
-    vectors = np.ascontiguousarray(embeddings, dtype=np.float32)
+    vectors = l2_normalize(embeddings)
     gc.collect()
     process = psutil.Process()
     rss_before = process.memory_info().rss
@@ -47,7 +56,7 @@ def search_parent_rankings(
     warmup_queries: int,
 ) -> tuple[dict[str, list[str]], dict[str, float]]:
     search_k = min(index.ntotal, max(top_k, top_k * oversample))
-    queries = np.ascontiguousarray(query_embeddings, dtype=np.float32)
+    queries = l2_normalize(query_embeddings)
     for query in queries[: min(warmup_queries, len(queries))]:
         index.search(query.reshape(1, -1), search_k)
     rankings: dict[str, list[str]] = {}

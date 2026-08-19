@@ -156,6 +156,7 @@ def _run_one(
         "chunking": json.dumps(retrieval["baseline_chunking"], sort_keys=True),
         "index": "faiss.IndexFlatIP",
         "normalized_embeddings": True,
+        "normalization_method": retrieval["normalization_method"],
         "embedding_dimension": metadata["embedding_dimension"],
         "corpus_chunks": len(chunks),
         **quality,
