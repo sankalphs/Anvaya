@@ -98,3 +98,20 @@ delta, estimated resident index size, and persistent disk size.
 The selection remains quality-first (`nDCG@10`, `MRR@10`, `Recall@10`), followed only on ties by
 P95 latency, P50 latency, and disk size. Results are saved to `results/index_ablation.csv`; the
 selected backend and exact configuration are saved to `results/index_winner.json`.
+
+## Phase 5: sealed test and retriever handoff
+
+```powershell
+hh-goa-ablate --config configs/experiment.yaml finalize run
+```
+
+This command evaluates only the already-selected stack on the sealed test split and refuses to
+silently re-evaluate a different configuration once `results/final_test.json` exists. It writes the
+final recommendation and a machine-readable retriever configuration. It then removes losing model
+directories only when they are direct children of `cache/models`, belong to an embedding candidate,
+and contain this project's exact `.hh_goa_model.json` ownership marker. The winning model and every
+cache outside that directory are preserved.
+
+The reusable `hh_goa_rag.retriever.ParentFaissRetriever` loads the persisted index and chunk mapping
+and accepts query embeddings, providing the retrieval boundary for the later Voice → STT → RAG
+pipeline without adding any speech, generation, or frontend components in this experiment.

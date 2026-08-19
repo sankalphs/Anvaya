@@ -19,4 +19,7 @@ results/runs/
 !results/chunking_winner.json
 !results/index_ablation.csv
 !results/index_winner.json
+!results/final_test.json
+!results/final_retriever_config.json
+!results/model_cleanup.json
 !results/final_recommendation.md

@@ -13,6 +13,7 @@ from hh_goa_rag.chunking_ablation import run_chunking_ablation
 from hh_goa_rag.config import load_config
 from hh_goa_rag.dataset import prepare_dataset, read_manifest
 from hh_goa_rag.embedding_ablation import run_embedding_ablation
+from hh_goa_rag.finalization import run_finalization
 from hh_goa_rag.index_ablation import run_index_ablation
 
 
@@ -63,6 +64,13 @@ def _index_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _finalize_run(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    result = run_finalization(config, data_dir=args.data_dir)
+    print(f"\nSealed test nDCG@10: **{result['ndcg_at_10']:.4f}**")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/experiment.yaml", type=Path)
@@ -92,6 +100,15 @@ def build_parser() -> argparse.ArgumentParser:
     index_run = index_subparsers.add_parser("run", help="Run/resume all index backends")
     index_run.add_argument("--data-dir", type=Path)
     index_run.set_defaults(handler=_index_run)
+    finalize_parser = subparsers.add_parser("finalize", help="Sealed test and final handoff")
+    finalize_subparsers = finalize_parser.add_subparsers(
+        dest="finalize_command", required=True
+    )
+    finalize_run = finalize_subparsers.add_parser(
+        "run", help="Evaluate once, recommend, and clean losing project models"
+    )
+    finalize_run.add_argument("--data-dir", type=Path)
+    finalize_run.set_defaults(handler=_finalize_run)
     return parser
 
 
