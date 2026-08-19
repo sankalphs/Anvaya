@@ -1,0 +1,11 @@
+services:
+  anvaya:
+    build: .
+    image: anvaya-voice-rag:phase7
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      HH_RAG_DEVICE: cpu
+    restart: unless-stopped

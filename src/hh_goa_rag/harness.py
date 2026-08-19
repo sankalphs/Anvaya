@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -91,14 +92,14 @@ class VoiceRAGHarness:
         dtype = "bfloat16" if device.startswith("cuda") else "float32"
         embedder = EmbeddingModel(
             MODEL_SPECS[FROZEN_RETRIEVAL["model"]],
-            Path(config["model_cache_path"]),
+            _portable_path(config["model_cache_path"]),
             device=device,
             max_sequence_length=512,
             dtype=dtype,
         )
         retriever = ParentFaissRetriever.load(
-            config["index_artifact"],
-            config["chunk_artifact"],
+            _portable_path(config["index_artifact"]),
+            _portable_path(config["chunk_artifact"]),
             top_k=FROZEN_TOP_K,
             oversample=int(config["search_oversample"]),
         )
@@ -115,7 +116,12 @@ class VoiceRAGHarness:
     def handle_text(self, transcript: object) -> GuardrailResponse:
         return self._handle_transcript(transcript, operation_started=time.perf_counter_ns())
 
-    def handle_audio(self, audio_path: str | Path) -> GuardrailResponse:
+    def handle_audio(
+        self,
+        audio_path: str | Path,
+        *,
+        on_stage: Callable[[str], None] | None = None,
+    ) -> GuardrailResponse:
         operation_started = time.perf_counter_ns()
         stages = _empty_stages()
         if self.stt is None:
@@ -125,6 +131,7 @@ class VoiceRAGHarness:
                 stages,
                 operation_started,
             )
+        _notify_stage(on_stage, "Transcribing")
         started = time.perf_counter_ns()
         try:
             result = self.stt.transcribe_rest(audio_path)
@@ -161,6 +168,7 @@ class VoiceRAGHarness:
             operation_started=operation_started,
             stages=stages,
             base_metadata={"stt": stt_metadata},
+            on_stage=on_stage,
         )
 
     def close(self) -> None:
@@ -175,12 +183,14 @@ class VoiceRAGHarness:
         operation_started: int,
         stages: dict[str, float] | None = None,
         base_metadata: dict[str, Any] | None = None,
+        on_stage: Callable[[str], None] | None = None,
     ) -> GuardrailResponse:
         stages = stages or _empty_stages()
         metadata = dict(base_metadata or {})
         decision_trace: list[dict[str, Any]] = []
         metadata["decision_trace"] = decision_trace
         try:
+            _notify_stage(on_stage, "Checking query")
             started = time.perf_counter_ns()
             validation = validate_transcript(transcript)
             stages["input_validation"] = _elapsed_ms(started)
@@ -225,6 +235,7 @@ class VoiceRAGHarness:
                     metadata=metadata,
                 )
 
+            _notify_stage(on_stage, "Retrieving evidence")
             started = time.perf_counter_ns()
             vectors, _ = self.embedder.encode_queries([validation.normalized_transcript])
             stages["embedding"] = _elapsed_ms(started)
@@ -236,7 +247,9 @@ class VoiceRAGHarness:
                 {
                     "rank": index,
                     "parent_id": str(_field(item, "parent_id", "")),
+                    "chunk_id": str(_field(item, "chunk_id", "")),
                     "score": float(_field(item, "score", 0.0)),
+                    "text": str(_field(item, "text", "")),
                 }
                 for index, item in enumerate(contexts, start=1)
             ]
@@ -277,6 +290,7 @@ class VoiceRAGHarness:
                 )
                 for index, item in enumerate(contexts, start=1)
             ]
+            _notify_stage(on_stage, "Generating answer")
             started = time.perf_counter_ns()
             generated = self.generator.generate(
                 validation.normalized_transcript,
@@ -284,6 +298,7 @@ class VoiceRAGHarness:
                 prompt_variant=FROZEN_PROMPT,
             )
             stages["generation"] = _elapsed_ms(started)
+            _notify_stage(on_stage, "Validating grounding")
             started = time.perf_counter_ns()
             grounding = validate_generation(generated, generation_contexts)
             stages["grounding_validation"] = _elapsed_ms(started)
@@ -396,3 +411,13 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
 
 def _elapsed_ms(started: int) -> float:
     return (time.perf_counter_ns() - started) / 1e6
+
+
+def _notify_stage(callback: Callable[[str], None] | None, stage: str) -> None:
+    if callback is not None:
+        callback(stage)
+
+
+def _portable_path(value: str | Path) -> Path:
+    """Interpret persisted repository-relative paths on Windows and Linux."""
+    return Path(str(value).replace("\\", "/"))

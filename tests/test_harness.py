@@ -86,7 +86,30 @@ def test_harness_returns_structured_grounded_answer() -> None:
     )
     assert value["metadata"]["grounding"]["valid"] is True
     assert len(value["metadata"]["retrieved"]) == FROZEN_TOP_K
+    assert value["metadata"]["retrieved"][0]["chunk_id"] == "c-1"
+    assert value["metadata"]["retrieved"][0]["text"] == "evidence 1"
     assert value["total_latency_ms"] >= 0
+
+
+def test_audio_harness_reports_only_actual_pipeline_stages() -> None:
+    observed: list[str] = []
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(),
+        retriever=FakeRetriever(),
+        generator=FakeGenerator(),
+        stt=FakeSTT("ok", transcript="गोल्डस्मिथ टेक्सास किस काउंटी में है"),
+    )
+
+    response = harness.handle_audio("query.wav", on_stage=observed.append)
+
+    assert response.route == Route.ANSWER
+    assert observed == [
+        "Transcribing",
+        "Checking query",
+        "Retrieving evidence",
+        "Generating answer",
+        "Validating grounding",
+    ]
 
 
 def test_input_route_short_circuits_expensive_components() -> None:

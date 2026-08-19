@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f1e8" />
+    <title>Anvaya — Grounded Voice Intelligence</title>
+    <meta
+      name="description"
+      content="A grounded multilingual Voice-RAG demo built for the HH Goa submission."
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Anvaya home">
+          <span class="brand-mark" aria-hidden="true">A</span>
+          <span>Anvaya</span>
+        </a>
+        <div class="system-chip" id="health-chip">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="health-text">Checking system</span>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <p class="eyebrow">HH Goa · Voice-RAG</p>
+          <h1>Ask with your voice.<br /><em>Answer from evidence.</em></h1>
+          <p class="hero-copy">
+            A multilingual voice assistant that transcribes with Sarvam, retrieves from a frozen
+            knowledge base, and answers only when the evidence supports it.
+          </p>
+        </section>
+
+        <section class="query-panel" aria-labelledby="query-title">
+          <div class="query-heading">
+            <div>
+              <p class="section-label">Voice query</p>
+              <h2 id="query-title">What would you like to know?</h2>
+            </div>
+            <span class="format-chip">16 kHz · mono · PCM16</span>
+          </div>
+
+          <div class="record-area">
+            <div class="record-visual" id="record-visual" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div class="record-actions">
+              <button class="primary-button" id="record-button" type="button">
+                <span class="record-icon" aria-hidden="true"></span>
+                <span id="record-label">Record</span>
+              </button>
+              <button class="stop-button" id="stop-button" type="button" disabled>
+                <span class="stop-icon" aria-hidden="true"></span>
+                Stop
+              </button>
+            </div>
+            <p class="record-hint" id="record-hint">Record up to 30 seconds</p>
+          </div>
+
+          <div class="divider"><span>or</span></div>
+
+          <label class="upload-control" for="audio-upload">
+            <span class="upload-icon" aria-hidden="true">↗</span>
+            <span>
+              <strong>Upload an audio file</strong>
+              <small>It will be converted in your browser before processing</small>
+            </span>
+            <input id="audio-upload" type="file" accept="audio/*,.wav" />
+          </label>
+
+          <div class="alert" id="alert" role="alert" hidden></div>
+        </section>
+
+        <section class="progress-panel" id="progress-panel" aria-live="polite" hidden>
+          <div class="progress-header">
+            <div>
+              <p class="section-label">Pipeline</p>
+              <h2 id="active-stage">Preparing audio</h2>
+            </div>
+            <div class="processing-orbit" aria-hidden="true"></div>
+          </div>
+          <ol class="stage-list" id="stage-list">
+            <li data-stage="Transcribing"><span>01</span>Transcribing</li>
+            <li data-stage="Checking query"><span>02</span>Checking query</li>
+            <li data-stage="Retrieving evidence"><span>03</span>Retrieving evidence</li>
+            <li data-stage="Generating answer"><span>04</span>Generating answer</li>
+            <li data-stage="Validating grounding"><span>05</span>Validating grounding</li>
+            <li data-stage="Complete"><span>06</span>Complete</li>
+          </ol>
+        </section>
+
+        <section class="result-panel" id="result-panel" aria-live="polite" hidden>
+          <div class="result-topline">
+            <span class="route-badge" id="route-badge">ANSWER</span>
+            <span class="latency" id="latency"></span>
+          </div>
+
+          <div class="transcript-block">
+            <p class="section-label">Transcript</p>
+            <p id="transcript"></p>
+          </div>
+
+          <div class="answer-block">
+            <p class="section-label" id="answer-label">Answer</p>
+            <p class="answer-text" id="answer"></p>
+            <p class="reason-code" id="reason-code"></p>
+          </div>
+
+          <div class="evidence-block" id="evidence-block" hidden>
+            <div class="evidence-heading">
+              <div>
+                <p class="section-label">Sources</p>
+                <h3>Retrieved evidence</h3>
+              </div>
+              <span id="source-count"></span>
+            </div>
+            <div class="evidence-list" id="evidence-list"></div>
+          </div>
+
+          <details class="technical-details">
+            <summary>
+              <span>Technical details</span>
+              <span class="summary-note">Measured timings &amp; retrieval trace</span>
+            </summary>
+            <div class="technical-content">
+              <div class="metric-grid" id="metric-grid"></div>
+              <div class="retrieved-ids">
+                <p class="section-label">Retrieved IDs</p>
+                <div id="retrieved-ids"></div>
+              </div>
+            </div>
+          </details>
+
+          <button class="secondary-button" id="new-query-button" type="button">
+            Ask another question
+          </button>
+        </section>
+      </main>
+
+      <footer>
+        <span>Frozen stack · deterministic routing · grounded citations</span>
+        <span>Sarvam · BGE-M3 · FAISS HNSW</span>
+      </footer>
+    </div>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

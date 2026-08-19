@@ -1,198 +1,185 @@
-# HH Goa Voice-RAG evaluation
+# Anvaya — HH Goa Voice-RAG
 
-Evaluation and integration repository for the HH Goa Voice-RAG project. The complete selected stack
-is frozen as Sarvam Saaras v3 STT → BGE-M3 → sentence chunks capped at 128 words → FAISS HNSW
-(`M=32`, `efConstruction=200`, `efSearch=128`) → deterministic guardrails → `sarvam-105b` →
-Top-10 → `strict_context_only` → deterministic grounding validation.
+Anvaya is a grounded multilingual voice assistant built for the HH Goa submission. It records or
+accepts audio in the browser, converts it to 16 kHz mono PCM16 WAV, and passes it through the
+already-frozen Voice-RAG pipeline. The web layer does not reproduce or replace pipeline logic.
 
-The repository contains retrieval, STT, generation, routing/guardrail, and complete-pipeline
-evaluation harnesses. It does not include a frontend, TTS, deployment, or production service.
+## Architecture
 
-## Environment
-
-Python 3.11–3.14 and an NVIDIA GPU are recommended. Install the project and experiment extras:
-
-```powershell
-python -m pip install -e ".[experiment,dev]"
+```text
+Voice
+→ Sarvam Saaras v3
+→ Guardrails
+→ BGE-M3
+→ FAISS HNSW
+→ Evidence gate
+→ Sarvam-105b
+→ Grounding validation
 ```
 
-All generated data, embeddings, indexes, and model downloads are scoped beneath this repository's
-`data/` and `cache/` directories and are ignored by Git.
+The selected stack is fixed to sentence-based chunks capped at 128 words; FAISS HNSW with
+`M=32`, `efConstruction=200`, and `efSearch=128`; Top-10 retrieval; and the
+`strict_context_only` generation prompt. The deterministic routes are `ANSWER`,
+`INSUFFICIENT_CONTEXT`, `OFF_TOPIC`, `UNSAFE`, `STT_FAILURE`, and `SYSTEM_ERROR`.
 
-## Phase 1: prepare the dataset
+The FastAPI route is intentionally thin:
 
-```powershell
-hh-goa-ablate --config configs/experiment.yaml dataset prepare
+```text
+POST /api/query/audio → VoiceRAGHarness.handle_audio() → GuardrailResponse.to_dict()
 ```
 
-The loader discovers the repository's real parquet inventory, resolves `language: auto` to the
-dataset's Hindi default, and pins the resolved Hub commit SHA. Recent `datasets` releases do not
-recognize the repository's legacy per-language loading script, and its parquet files each contain
-one very large row group. The loader therefore downloads one pinned file at a time, scans it in
-Arrow batches, caches compact JSONL artifacts, and optionally removes only the transient raw file.
+The browser shows only stages actually reached by the harness, measured request/stage latency,
+retrieved passages and scores, and model-cited evidence IDs. See [architecture](docs/architecture.md)
+for the complete runtime and trust boundaries.
 
-The upstream training split supplies development queries for all ablations. The upstream
-validation split is sealed as test and is evaluated only once on the final winning stack. Each
-split contains a global pooled corpus plus queries and qrels. Qrels identify parent passages, so
-later chunking strategies are compared against exactly the same gold unit.
+## Run locally
 
-Run checks with:
+Prerequisites: Python 3.11–3.14, the frozen local artifacts referenced by
+`results/final_retriever_config.json`, and a Sarvam API key.
 
 ```powershell
-python -m pytest
-ruff check .
+python -m pip install -e ".[app,web]"
+Copy-Item .env.example .env
+# Edit .env and set SARVAM_API_KEY. Never commit this file.
+python -m uvicorn hh_goa_rag.web:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-## Phase 2: embedding-model ablation
+Open `http://localhost:8000`. Microphone capture works on localhost or an HTTPS deployment.
+The health check is `GET /health`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SARVAM_API_KEY` | required | Sarvam STT and generation authentication |
+| `HH_RAG_DEVICE` | `auto` | `auto`, `cpu`, or a CUDA device |
+| `HH_RAG_ENV_FILE` | `.env` | Local dotenv path |
+| `HH_RAG_RETRIEVER_CONFIG` | `results/final_retriever_config.json` | Frozen artifact manifest |
+
+The service validates the key, config, BGE-M3 cache, FAISS index, and chunk mapping before marking
+`/health` ready. It uses one worker because the model and progress registry must not be duplicated.
+
+## Docker
+
+The image intentionally includes the exact frozen model, index, and chunk artifacts (about 2.4 GB
+before Python/runtime layers).
 
 ```powershell
-hh-goa-ablate --config configs/experiment.yaml embedding run
+docker build -t anvaya-voice-rag:phase7 .
+docker run --rm --env-file .env -p 8000:8000 anvaya-voice-rag:phase7
 ```
 
-Every candidate uses the same development queries, 128-word non-overlapping chunks, normalized
-embeddings, exact FAISS inner-product search, parent-level qrels, and top-K settings. E5 receives
-its published `query:`/`passage:` prefixes; Jina receives its published retrieval prompts and task
-adapters. IndicBERT is loaded through its model-card-prescribed bidirectional causal-LM wrapper and
-mean-pooled because the released checkpoint is not a retrieval-tuned sentence encoder.
+Or use `docker compose up --build`. The container runs as a non-root user, has an application
+health check, is offline with respect to Hugging Face model resolution, and never copies `.env`.
 
-The current Transformers 5 runtime needs two recorded compatibility adapters. Alibaba's custom GTE
-implementation leaves non-persistent position and RoPE buffers uninitialized after meta-device
-loading, so they are deterministically reconstructed from the checkpoint config. Jina's pinned
-secondary implementation is stored in the project-local dynamic-module cache and receives the
-current `post_init` lifecycle call. These adapters do not change learned tensors.
+## Retrieval ablations — measured
 
-The winner is selected by the predeclared quality priority `nDCG@10`, `MRR@10`, `Recall@10`, with
-combined query-embedding and retrieval P50 latency only as the final tie-breaker. Results are saved
-to `results/embedding_ablation.csv`; per-run JSON and all embeddings remain in ignored local caches.
+All development ablations used 1,000 fixed queries and parent-level qrels. The sealed test was run
+once on the selected stack.
 
-## Phase 3: chunking ablation
+| Stage / selected candidate | Recall@10 | MRR@10 | nDCG@10 | Retrieval P50 |
+| --- | ---: | ---: | ---: | ---: |
+| Embedding: BAAI/bge-m3 | 0.8578 | 0.5039 | 0.5873 | 1.6711 ms |
+| Chunking: sentence-based | 0.8625 | 0.5073 | 0.5908 | 1.5964 ms |
+| Index: FAISS HNSW | 0.8625 | 0.5073 | 0.5908 | 0.3425 ms |
+| Sealed final test | 0.8908 | 0.5371 | 0.6212 | 0.3876 ms |
+
+BGE-M3 won the quality-first embedding comparison. Sentence packing produced the highest measured
+development nDCG@10. FAISS HNSW matched exact-search quality and won the latency tie-breaker; faster
+IVF-Flat reduced Recall@10 to 0.8387. Full tables are summarized in
+[evaluation summary](docs/evaluation_summary.md).
+
+## Generation ablations — measured
+
+The experiments reused one cached gold-query retrieval snapshot, so they could not change STT or
+retrieval. The qualitative review was performed blinded by Codex, not human judges.
+
+| Comparison | Selected | Correctness | Relevance | Faithfulness | P50 / P95 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Model | `sarvam-105b` | 4.667 | 4.583 | 5.000 | 1420 / 32108 ms |
+| Top-K | `10` | 4.667 | 4.667 | 5.000 | 1384 / 2327 ms |
+| Prompt | `strict_context_only` | 4.667 | 4.667 | 5.000 | 1580 / 7009 ms |
+
+The selected prompt recorded 100% schema validity and grounded citation validity over its 12
+measured cases, with no serious grounding failure. This small development comparison is not a
+formal production-quality estimate.
+
+## Guardrail evaluation — DEVELOPMENT
+
+The 24-case development set contains 12 answerable, 4 insufficient-evidence, 4 off-topic, and 4
+unsafe cases. It selected the already-frozen Top-1 threshold of 0.67 with the fixed consistency
+rescue.
+
+| Metric | DEVELOPMENT result |
+| --- | ---: |
+| Routing accuracy | 24/24 (100%) |
+| False refusal rate | 0% |
+| False answer rate | 0% |
+| Guardrail P50 / P70 / P95 / P100 | 0.0198 / 0.0217 / 0.0344 / 0.0694 ms |
+
+These are threshold-selection development results, not formal Voice E2E results.
+
+## Voice E2E
+
+**Formal Voice E2E evaluation: PENDING**
+
+The manifest currently contains **0/24 real recordings**. Result CSVs contain pending rows with
+blank metrics; no synthetic audio, cached latency, or smoke timing is promoted into formal tables.
+The separately labeled robustness smoke suite currently passes 10/10 structured failure checks.
+
+### Exact benchmark commands
+
+Install evaluation and development dependencies first:
 
 ```powershell
-hh-goa-ablate --config configs/experiment.yaml chunking run
+python -m pip install -e ".[experiment,stt,generation,web,dev]"
 ```
 
-The winning embedding model is held fixed while fixed-size, overlapping, sentence-based,
-semantic, and parent-child strategies are compared on the same development queries and
-parent-level qrels. Semantic boundaries use adjacent normalized sentence-embedding similarity
-with a predeclared threshold; no qrels are used to tune boundaries. All strategies use normalized
-embeddings and exact FAISS inner-product search.
-
-The winner is selected by the same quality-first priority as Phase 2, with retrieval P50 latency
-only as a final tie-breaker. The comparison is saved to `results/chunking_ablation.csv` and the
-machine-readable selected configuration to `results/chunking_winner.json`.
-
-All vectors receive a final float32 L2 normalization at the shared retrieval boundary. This
-corrects the small unit-norm drift introduced when a model performs its internal normalization in
-bfloat16, and ensures inner product is cosine-equivalent for every experiment and backend.
-
-## Phase 4: index and local-storage ablation
-
-```powershell
-hh-goa-ablate --config configs/experiment.yaml index run
-```
-
-This stage reuses the exact winning corpus and query vectors; it does not re-embed text. It compares
-FAISS FlatIP, HNSW (`M=32`, `efConstruction=200`, `efSearch=128`), IVF-Flat (`nlist=128`,
-`nprobe=16`), exact Qdrant embedded/local cosine search, and Chroma local HNSW cosine search
-(`M=32`, `efConstruction=200`, `efSearch=128`, eight threads). Each backend is warmed up before
-timing 1,000 individual queries, and reports P50/P70/P95/P100 latency, indexing time, process RAM
-delta, estimated resident index size, and persistent disk size.
-
-The selection remains quality-first (`nDCG@10`, `MRR@10`, `Recall@10`), followed only on ties by
-P95 latency, P50 latency, and disk size. Results are saved to `results/index_ablation.csv`; the
-selected backend and exact configuration are saved to `results/index_winner.json`.
-
-## Phase 5: sealed test and retriever handoff
-
-```powershell
-hh-goa-ablate --config configs/experiment.yaml finalize run
-```
-
-This command evaluates only the already-selected stack on the sealed test split and refuses to
-silently re-evaluate a different configuration once `results/final_test.json` exists. It writes the
-final recommendation and a machine-readable retriever configuration. It then removes losing model
-directories only when they are direct children of `cache/models`, belong to an embedding candidate,
-and contain this project's exact `.hh_goa_model.json` ownership marker. The winning model and every
-cache outside that directory are preserved.
-
-The reusable `hh_goa_rag.retriever.ParentFaissRetriever` loads the persisted index and chunk mapping
-and accepts query embeddings. The later STT evaluation uses that boundary without changing the
-selected model, chunking, index, or retrieval parameters.
-
-## Phase 6: real Sarvam STT evaluation
-
-Install the STT and development extras:
-
-```powershell
-python -m pip install -e ".[experiment,stt,dev]"
-```
-
-Copy `.env.example` to the ignored `.env` file and set `SARVAM_API_KEY`. The provider and
-configuration are fixed to Sarvam AI `saaras:v3` with `mode="transcribe"`; no alternate STT
-provider is implemented. List microphone devices and record the pending real-human samples with:
+1. List devices and record all 24 real-human samples. Replace device `5` and speaker metadata with
+   the actual setup.
 
 ```powershell
 python eval/record_audio.py --list-devices
 python eval/record_audio.py --all-pending --speaker-id speaker-01 --device 5
 ```
 
-The recorder writes 16 kHz mono PCM WAV files under `eval/audio` and atomically marks manifest rows
-ready. Pending or missing audio is never scored. Once recordings are ready, run both Sarvam
-integration modes and the frozen-retriever impact evaluation:
+2. Run Sarvam REST and streaming STT evaluation plus frozen-retriever degradation analysis.
 
 ```powershell
-python eval/evaluate_stt.py --manifest eval/stt_manifest.jsonl --run-id sarvam-real-001 --device auto
+python eval/evaluate_stt.py --manifest eval/stt_manifest.jsonl --dataset eval/eval_dataset.jsonl --run-id sarvam-real-001 --transport both --device auto --env-file .env
 ```
 
-This produces per-sample STT results, gold-text versus transcript retrieval degradation, raw run
-observations, and a data-driven REST-versus-streaming recommendation. The sealed test remains
-untouched.
-
-## Phase 7: generation selection
-
-The generation evaluation uses a single cached gold-query Top-10 retrieval snapshot so model,
-Top-K, and prompt comparisons do not alter STT or retrieval. The selected configuration is
-`sarvam-105b` → Top-10 → `strict_context_only`. Its measured generation-only latency was
-P50/P70/P95/P100 1580/1966/7009/11849 ms, so this stack cannot satisfy a complete-pipeline target
-below 200 ms. See `results/generation_recommendation.md` for the blinded qualitative review and
-ablation details.
-
-## Phase 8: deterministic guardrails
-
-`hh_goa_rag.guardrails` routes structured outcomes among `ANSWER`, `INSUFFICIENT_CONTEXT`,
-`OFF_TOPIC`, `UNSAFE`, `STT_FAILURE`, and `SYSTEM_ERROR`. Input policy checks run before retrieval;
-the frozen evidence rule uses Top-1 ≥ 0.67 or the fixed Top-K consistency rescue; generation output
-must pass schema and retrieved-citation validation. These rules add no LLM judge call.
-
-The 24-case development routing set scored 24/24 with no false answers or false refusals and
-guardrail-only P50/P70/P95/P100 latency of approximately 0.020/0.022/0.034/0.069 ms. These are
-development-only threshold-selection results, not real-voice E2E measurements. See
-`results/guardrail_recommendation.md`.
-
-## Phase 9: complete Voice-RAG integration
-
-The `hh_goa_rag.harness.VoiceRAGHarness` implements:
-
-```text
-audio
-→ Sarvam STT
-→ input and policy guardrails
-→ BGE-M3 query embedding
-→ FAISS Top-10 vector search
-→ evidence guardrail
-→ sarvam-105b generation
-→ grounding validation
-→ structured response with provenance and stage timings
-```
-
-Run the complete evaluator with:
+3. Run the formal 24-sample Voice-RAG E2E evaluation.
 
 ```powershell
-python eval/evaluate_e2e.py
+python eval/evaluate_e2e.py --manifest eval/stt_manifest.jsonl --dataset eval/eval_dataset.jsonl --output-dir results --env-file .env --device auto
 ```
 
-The 24-case recording manifest currently has 0/24 real recordings, so formal real-voice completion,
-quality, WER, retrieval-degradation, latency-budget, category, and failure metrics are explicitly
-pending. `results/e2e_*.csv` contains blank pending rows rather than synthetic values. Text-path
-integration and ten failure-mode checks are recorded separately as smoke tests and never enter the
-formal latency tables. See `results/e2e_recommendation.md`.
+4. Regenerate final result tables by rerunning steps 2 and 3 after all manifest rows are `ready`.
+   They write `results/stt_evaluation.csv`, `results/stt_retrieval_impact.csv`, and all
+   `results/e2e_*.csv`/`results/e2e_recommendation.md` artifacts. Missing recordings cause explicit
+   pending output; they are never scored.
+
+`eval/record_audio.py` and `eval/evaluate_e2e.py` remain the authoritative recording and formal
+benchmark entry points.
+
+## Latency limitation
+
+**The measured Sarvam generation P50 is ~1580 ms, therefore the current stack cannot satisfy the
+challenge's <200 ms complete-pipeline target.**
+
+This is reported without adjustment: generation alone is slower than the end-to-end target, before
+adding STT, embedding, search, or guardrails.
+
+## Verification and submission material
+
+```powershell
+python -m pytest
+ruff check .
+```
+
+- [Demo script](docs/demo_script.md)
+- [Architecture](docs/architecture.md)
+- [Evaluation summary](docs/evaluation_summary.md)
+- [Submission checklist](docs/submission_checklist.md)
+
+No API key or real evaluation recording is committed. Generated model/data artifacts are
+repository-local and ignored by Git; the Docker build consumes the exact local frozen artifacts.
