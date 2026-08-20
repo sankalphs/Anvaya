@@ -47,7 +47,6 @@ embedding_ablation:
     - intfloat/multilingual-e5-base
     - Alibaba-NLP/gte-multilingual-base
     - jinaai/jina-embeddings-v3
-    - ai4bharat/IndicBERT-v3-4B
   selection_metrics:
     - ndcg_at_10
     - mrr_at_10
