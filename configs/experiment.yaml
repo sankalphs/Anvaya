@@ -107,17 +107,6 @@ index_ablation:
       nprobe: 16
       pq_m: 16
       pq_nbits: 8
-    - name: qdrant_local
-      engine: qdrant_local
-      distance: cosine
-      search_mode: exact  # Qdrant embedded/local mode is an exact in-process implementation
-    - name: chroma_local
-      engine: chroma_local
-      distance: cosine
-      m: 32
-      ef_construction: 200
-      ef_search: 128
-      num_threads: 8
   selection_metrics:
     - ndcg_at_10
     - mrr_at_10
