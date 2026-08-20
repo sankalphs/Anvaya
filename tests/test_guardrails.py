@@ -100,7 +100,7 @@ def test_retrieval_uses_threshold_and_consistency_rescues() -> None:
 def generation(
     *,
     answer_status: str = "ANSWER",
-    answer: str = "grounded answer",
+    answer: str = "evidence 1",
     evidence_ids: list[str] | None = None,
 ) -> dict[str, object]:
     evidence_ids = ["p-1"] if evidence_ids is None else evidence_ids

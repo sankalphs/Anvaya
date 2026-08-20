@@ -12,7 +12,7 @@ Browser microphone or upload
       → BGE-M3 query embedding
       → FAISS HNSW parent retrieval, Top-10
       → deterministic evidence-sufficiency gate
-      → sarvam-105b with strict_context_only
+      → Groq `openai/gpt-oss-20b` with low reasoning and strict_context_only
       → citation/schema grounding validation
   → structured GuardrailResponse
   → transcript, route, answer/refusal, evidence, citations, measured timings
@@ -33,7 +33,7 @@ inside `VoiceRAGHarness` and its frozen components.
 | Index | FAISS HNSW, `M=32`, `efConstruction=200`, `efSearch=128` |
 | Retrieval depth | Top-10 unique parents |
 | Evidence threshold | Top-1 ≥ 0.67 or frozen consistency rescue |
-| Generator | `sarvam-105b`, maximum 192 output tokens |
+| Generator | Groq `openai/gpt-oss-20b`, low reasoning, maximum 128 output tokens |
 | Prompt | `strict_context_only` |
 | Output validation | schema, non-empty answer, known citation, citation required |
 

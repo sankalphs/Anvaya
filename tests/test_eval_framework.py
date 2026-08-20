@@ -112,6 +112,7 @@ def test_generation_guardrail_and_e2e_metrics() -> None:
         "decision": "answer",
         "retrieved_parent_ids": ["p1"],
         "answer": "fact",
+        "citations": ["p1"],
         "judgment": _judgment(),
         "latency_ms": 199,
     }
@@ -132,6 +133,9 @@ def test_frozen_config_and_sealed_split_guards(tmp_path: Path) -> None:
             "ef_construction": 200,
             "ef_search": 128,
         },
+        "top_k": 10,
+        "search_oversample": 20,
+        "normalization_method": "float32_l2_v1",
     }
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(frozen), encoding="utf-8")

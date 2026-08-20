@@ -18,6 +18,13 @@ const elements = {
   recordVisual: document.querySelector("#record-visual"),
   recordHint: document.querySelector("#record-hint"),
   upload: document.querySelector("#audio-upload"),
+  voiceModeButton: document.querySelector("#voice-mode-button"),
+  textModeButton: document.querySelector("#text-mode-button"),
+  voiceInputPanel: document.querySelector("#voice-input-panel"),
+  textInputPanel: document.querySelector("#text-input-panel"),
+  textQuery: document.querySelector("#text-query"),
+  textCount: document.querySelector("#text-count"),
+  textSubmitButton: document.querySelector("#text-submit-button"),
   alert: document.querySelector("#alert"),
   progressPanel: document.querySelector("#progress-panel"),
   activeStage: document.querySelector("#active-stage"),
@@ -54,10 +61,32 @@ let progressRequestId = null;
 elements.recordButton.addEventListener("click", startRecording);
 elements.stopButton.addEventListener("click", () => stopRecording(true));
 elements.upload.addEventListener("change", handleUpload);
+elements.voiceModeButton.addEventListener("click", () => setInputMode("voice"));
+elements.textModeButton.addEventListener("click", () => setInputMode("text"));
+elements.textQuery.addEventListener("input", updateTextCount);
+elements.textSubmitButton.addEventListener("click", submitText);
 elements.newQueryButton.addEventListener("click", resetForNewQuery);
 window.addEventListener("pagehide", releaseMicrophone);
 
+updateTextCount();
 checkHealth();
+
+function setInputMode(mode) {
+  const textMode = mode === "text";
+  elements.voiceModeButton.classList.toggle("active", !textMode);
+  elements.textModeButton.classList.toggle("active", textMode);
+  elements.voiceModeButton.setAttribute("aria-selected", String(!textMode));
+  elements.textModeButton.setAttribute("aria-selected", String(textMode));
+  elements.voiceInputPanel.hidden = textMode;
+  elements.textInputPanel.hidden = !textMode;
+  clearAlert();
+  if (textMode) window.setTimeout(() => elements.textQuery.focus(), 0);
+}
+
+function updateTextCount() {
+  const count = elements.textQuery.value.length;
+  elements.textCount.textContent = `${count.toLocaleString()} / 2,000 characters`;
+}
 
 async function checkHealth() {
   try {
@@ -78,8 +107,10 @@ async function startRecording() {
     showAlert("Microphone capture is not supported in this browser. Try uploading audio instead.");
     return;
   }
+  let pendingStream = null;
+  let pendingContext = null;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
+    pendingStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
         echoCancellation: true,
@@ -87,26 +118,26 @@ async function startRecording() {
         autoGainControl: true,
       },
     });
-    const context = new AudioContext();
-    await context.audioWorklet.addModule("/static/audio-worklet.js");
-    const source = context.createMediaStreamSource(stream);
-    const worklet = new AudioWorkletNode(context, "pcm-capture-processor", {
+    pendingContext = new AudioContext();
+    await pendingContext.audioWorklet.addModule("/static/audio-worklet.js");
+    const source = pendingContext.createMediaStreamSource(pendingStream);
+    const worklet = new AudioWorkletNode(pendingContext, "pcm-capture-processor", {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [1],
     });
-    const silence = context.createGain();
+    const silence = pendingContext.createGain();
     silence.gain.value = 0;
     recording.chunks = [];
     worklet.port.onmessage = (event) => recording.chunks.push(new Float32Array(event.data));
     source.connect(worklet);
     worklet.connect(silence);
-    silence.connect(context.destination);
+    silence.connect(pendingContext.destination);
 
     Object.assign(recording, {
       active: true,
-      context,
-      stream,
+      context: pendingContext,
+      stream: pendingStream,
       source,
       worklet,
       silence,
@@ -116,6 +147,8 @@ async function startRecording() {
     setRecordingUi(true);
     updateRecordingClock();
   } catch (error) {
+    if (pendingStream) pendingStream.getTracks().forEach((track) => track.stop());
+    if (pendingContext && pendingContext.state !== "closed") await pendingContext.close();
     releaseMicrophone();
     if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
       showAlert(
@@ -244,6 +277,47 @@ async function submitAudio(wavBlob) {
     progressRequestId = null;
     elements.progressPanel.hidden = true;
     handleUserError(error, "The backend could not process the request. Please try again.");
+  } finally {
+    setInputDisabled(false);
+  }
+}
+
+async function submitText() {
+  clearAlert();
+  const text = elements.textQuery.value.trim();
+  if (!text) {
+    showAlert("Type a question before retrieving an answer.");
+    elements.textQuery.focus();
+    return;
+  }
+  setInputDisabled(true);
+  elements.resultPanel.hidden = true;
+  resetStages();
+  elements.progressPanel.hidden = false;
+  elements.activeStage.textContent = "Preparing text";
+  const requestId = makeRequestId();
+  progressRequestId = requestId;
+  pollProgress(requestId);
+  try {
+    const response = await fetch("/api/query/text", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-ID": requestId,
+      },
+      body: JSON.stringify({ text }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new UserFacingError(payload.detail || "The backend could not process this question.");
+    }
+    progressRequestId = null;
+    markProgress({ stage: "Complete", history: ["Complete"], complete: true });
+    renderResult(payload);
+  } catch (error) {
+    progressRequestId = null;
+    elements.progressPanel.hidden = true;
+    handleUserError(error, "The backend could not process the question. Please try again.");
   } finally {
     setInputDisabled(false);
   }
@@ -393,6 +467,7 @@ function setRecordingUi(active) {
   elements.recordButton.disabled = active;
   elements.stopButton.disabled = !active;
   elements.upload.disabled = active;
+  setModeDisabled(active);
   elements.recordVisual.classList.toggle("recording", active);
   elements.recordLabel.textContent = active ? "Recording" : "Record";
   if (!active) elements.recordHint.textContent = "Record up to 30 seconds";
@@ -402,6 +477,14 @@ function setInputDisabled(disabled) {
   elements.recordButton.disabled = disabled;
   elements.stopButton.disabled = true;
   elements.upload.disabled = disabled;
+  elements.textQuery.disabled = disabled;
+  elements.textSubmitButton.disabled = disabled;
+  setModeDisabled(disabled);
+}
+
+function setModeDisabled(disabled) {
+  elements.voiceModeButton.disabled = disabled;
+  elements.textModeButton.disabled = disabled;
 }
 
 function resetForNewQuery() {
@@ -409,6 +492,8 @@ function resetForNewQuery() {
   elements.progressPanel.hidden = true;
   clearAlert();
   resetStages();
+  elements.textQuery.value = "";
+  updateTextCount();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 

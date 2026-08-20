@@ -34,7 +34,7 @@ class FakeRetriever:
         self.calls = 0
         self.contexts = [
             Context(f"p-{index}", f"c-{index}", f"evidence {index}", score - index / 100)
-            for index in range(1, FROZEN_TOP_K + 1)
+            for index in range(1, FROZEN_TOP_K + 3)
         ]
 
     def retrieve(self, _: Any) -> list[Context]:
@@ -57,13 +57,13 @@ class FakeGenerator:
             return self.result
         raw = {
             "status": "ANSWER",
-            "answer": "उत्तर",
+            "answer": "evidence 1",
             "evidence_ids": ["p-1"],
         }
         return {
             "status": "ok",
             "answer_status": "ANSWER",
-            "answer": "उत्तर",
+            "answer": "evidence 1",
             "evidence_ids": ["p-1"],
             "raw_output": json.dumps(raw),
             "diagnostics": {"schema_valid": True},
@@ -77,7 +77,7 @@ def test_harness_returns_structured_grounded_answer() -> None:
     response = harness.handle_text("गोल्डस्मिथ टेक्सास किस काउंटी में है")
     value = response.to_dict()
     assert response.route == Route.ANSWER
-    assert response.answer == "उत्तर"
+    assert response.answer == "evidence 1"
     assert response.citations == ("p-1",)
     assert len(response.retrieved_ids) == FROZEN_TOP_K
     assert set(STAGE_NAMES).issubset(value["stage_latencies_ms"])

@@ -51,6 +51,12 @@ def _prepare_test_embeddings(
     model: str,
     revision: str,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    effective_device = "cuda" if torch.cuda.is_available() else "cpu"
+    effective_dtype = (
+        str(config["embedding_ablation"]["dtype"])
+        if effective_device == "cuda"
+        else "float32"
+    )
     identity = {
         "dataset": data_dir.name,
         "split": "test",
@@ -58,7 +64,8 @@ def _prepare_test_embeddings(
         "model": model,
         "revision": revision,
         "max_length": config["embedding_ablation"]["max_sequence_length"],
-        "dtype": config["embedding_ablation"]["dtype"],
+        "device": effective_device,
+        "dtype": effective_dtype,
         "normalization": config["retrieval"]["normalization_method"],
     }
     root = Path(config["cache"]["embeddings"]) / "final" / stable_fingerprint(identity)
@@ -77,9 +84,9 @@ def _prepare_test_embeddings(
     encoder = EmbeddingModel(
         MODEL_SPECS[model],
         model_path,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device=effective_device,
         max_sequence_length=int(config["embedding_ablation"]["max_sequence_length"]),
-        dtype=config["embedding_ablation"]["dtype"],
+        dtype=effective_dtype,
     )
     try:
         encoder.warm_up(

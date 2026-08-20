@@ -42,6 +42,8 @@ SUPPORTED_REST_SUFFIXES = {
     ".webm",
     ".wma",
 }
+MAX_AUDIO_BYTES = 2 * 1024 * 1024
+MAX_AUDIO_DURATION_MS = 30_000
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,8 @@ class SarvamSTTConfig:
     backoff_base_s: float = 0.5
     backoff_max_s: float = 2.0
     post_final_grace_s: float = 0.25
+    max_audio_bytes: int = MAX_AUDIO_BYTES
+    max_audio_duration_ms: int = MAX_AUDIO_DURATION_MS
 
     def __post_init__(self) -> None:
         if self.model != SARVAM_MODEL or self.mode != SARVAM_MODE:
@@ -74,6 +78,8 @@ class SarvamSTTConfig:
             raise ValueError("streaming_chunk_ms must be between 32 and 1000")
         if self.timeout_s <= 0 or self.max_attempts <= 0:
             raise ValueError("timeout_s and max_attempts must be positive")
+        if self.max_audio_bytes <= 0 or self.max_audio_duration_ms <= 0:
+            raise ValueError("Audio limits must be positive")
         if not 0 <= self.backoff_base_s <= self.backoff_max_s:
             raise ValueError("Invalid bounded-backoff configuration")
 
@@ -173,7 +179,12 @@ class SarvamSTT:
         operation_started = time.perf_counter_ns()
         try:
             audio = inspect_audio(audio_path, require_streaming_wav=False)
-            if audio.duration_ms is not None and audio.duration_ms > 30_000:
+            if audio.bytes > self.config.max_audio_bytes:
+                raise AudioValidationError("REST transcription audio exceeds the byte limit")
+            if (
+                audio.duration_ms is not None
+                and audio.duration_ms > self.config.max_audio_duration_ms
+            ):
                 raise AudioValidationError("REST transcription accepts at most 30 seconds")
         except (AudioValidationError, OSError) as error:
             return self._error_result(
@@ -253,6 +264,10 @@ class SarvamSTT:
         operation_started = time.perf_counter_ns()
         try:
             audio = inspect_audio(audio_path, require_streaming_wav=True)
+            if audio.bytes > self.config.max_audio_bytes:
+                raise AudioValidationError("Streaming audio exceeds the byte limit")
+            if audio.duration_ms > self.config.max_audio_duration_ms:
+                raise AudioValidationError("Streaming transcription accepts at most 30 seconds")
             wav_chunks = _wav_chunks(Path(audio.path), self.config.streaming_chunk_ms)
         except (AudioValidationError, OSError, wave.Error) as error:
             return self._error_result(
@@ -524,7 +539,7 @@ def inspect_audio(path: str | Path, *, require_streaming_wav: bool) -> AudioInfo
             raise AudioValidationError("Streaming WAV must be mono PCM16 at 16 kHz")
     duration_ms = frames / sample_rate * 1000
     if not math.isfinite(duration_ms) or duration_ms <= 0:
-        raise AudioValidationError("Audio duration is invalid")
+            raise AudioValidationError("Audio duration is invalid")
     return AudioInfo(
         str(audio_path), size, duration_ms, sample_rate, channels, sample_width, frames
     )

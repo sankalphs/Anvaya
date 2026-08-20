@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -16,17 +16,16 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
+COPY constraints-docker.txt ./
 COPY src ./src
-RUN python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.6" \
-    && python -m pip install ".[app,web]"
+RUN python -m pip install --index-url https://download.pytorch.org/whl/cpu \
+      --constraint constraints-docker.txt "torch==2.13.0+cpu" \
+    && python -m pip install --constraint constraints-docker.txt ".[app,web]"
 
-# The frozen retriever is fully local. These exact artifacts are intentionally baked into the
-# demo image so startup never changes the selected model, index, or chunk mapping.
+# The configuration is tracked; large model/index/data artifacts are mounted at runtime.
+# This keeps image builds reproducible from a clean checkout while allowing deployments to
+# provision artifacts through an image layer, volume, or artifact store.
 COPY results/final_retriever_config.json ./results/final_retriever_config.json
-COPY cache/models/BAAI__bge-m3--5617a9f61b02 ./cache/models/BAAI__bge-m3--5617a9f61b02
-COPY cache/indexes/final/3b19f7581e6e195f ./cache/indexes/final/3b19f7581e6e195f
-COPY data/processed/23828c1c95c62c20/chunks/final-test-3b19f7581e6e195f.jsonl \
-    ./data/processed/23828c1c95c62c20/chunks/final-test-3b19f7581e6e195f.jsonl
 
 RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app

@@ -42,6 +42,9 @@ FROZEN_RETRIEVAL_STACK = {
     "m": 32,
     "ef_construction": 200,
     "ef_search": 128,
+    "top_k": 10,
+    "search_oversample": 20,
+    "normalization_method": "float32_l2_v1",
 }
 GENERATION_PASS_THRESHOLD = 0.8
 _SPACE_RE = re.compile(r"\s+", re.UNICODE)
@@ -93,6 +96,7 @@ def load_dataset(
         raise EvaluationInputError("Evaluation dataset has no case records")
     identifiers: set[str] = set()
     categories: set[str] = set()
+    selected_categories: set[str] = set()
     selected: list[dict[str, Any]] = []
     for case in cases:
         case_id = str(case.get("case_id", ""))
@@ -115,10 +119,11 @@ def load_dataset(
             continue
         if case_split == split:
             selected.append(case)
+            selected_categories.add(category)
     if not selected:
         raise EvaluationInputError(f"No cases found for split {split!r}")
-    if split == "development" and not REQUIRED_CATEGORIES.issubset(categories):
-        missing = sorted(REQUIRED_CATEGORIES - categories)
+    if split == "development" and not REQUIRED_CATEGORIES.issubset(selected_categories):
+        missing = sorted(REQUIRED_CATEGORIES - selected_categories)
         raise EvaluationInputError(f"Development dataset is missing categories: {missing}")
     return selected
 
@@ -161,6 +166,9 @@ def assert_frozen_retrieval_config(path: str | Path) -> dict[str, Any]:
         "m": config.get("index", {}).get("m"),
         "ef_construction": config.get("index", {}).get("ef_construction"),
         "ef_search": config.get("index", {}).get("ef_search"),
+        "top_k": config.get("top_k"),
+        "search_oversample": config.get("search_oversample"),
+        "normalization_method": config.get("normalization_method"),
     }
     if observed != FROZEN_RETRIEVAL_STACK:
         differences = {
@@ -522,9 +530,14 @@ def evaluate_e2e_records(
             relevant = {str(item) for item in case["expected"].get("relevant_parent_ids", [])}
             ranked = _ranked_parent_ids(prediction)[:10]
             retrieval_hit = bool(relevant.intersection(ranked))
+            citations = prediction.get("citations", prediction.get("evidence_ids", ()))
+            if not isinstance(citations, (list, tuple, set)):
+                citations = ()
+            citation_valid = bool(citations) and set(map(str, citations)).issubset(set(ranked))
             judged = generation_row(case, prediction)
             generation_pass = (
-                all(
+                citation_valid
+                and all(
                     float(judged[field]) >= GENERATION_PASS_THRESHOLD
                     for field in ("correctness", "relevance", "faithfulness")
                 )
@@ -543,6 +556,7 @@ def evaluate_e2e_records(
                 "decision": decision,
                 "route_correct": route_correct,
                 "retrieval_hit_at_10": retrieval_hit,
+                "citation_valid": citation_valid,
                 "generation_pass": generation_pass,
                 "success": success,
                 "failed": failed,
