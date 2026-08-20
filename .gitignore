@@ -4,6 +4,10 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
+.env
+!.env.example
+eval/audio/*.wav
+!eval/audio/.gitkeep
 
 # Reproducible generated artifacts (never commit large data/model caches)
 cache/
@@ -24,3 +28,6 @@ results/runs/
 !results/model_cleanup.json
 !results/final_recommendation.md
 !results/evaluation_baseline.md
+!results/stt_evaluation.csv
+!results/stt_retrieval_impact.csv
+!results/stt_recommendation.md
