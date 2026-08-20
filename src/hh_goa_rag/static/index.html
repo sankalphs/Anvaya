@@ -129,7 +129,7 @@
               <span class="architecture-arrow" aria-hidden="true">↓</span>
               <div class="architecture-node"><strong>Guardrails</strong><small>Validate + deterministic route</small></div>
               <span class="architecture-arrow" aria-hidden="true">↓</span>
-              <div class="architecture-node"><strong>Retrieve</strong><small>multilingual E5-small → FAISS FlatIP2 · Top-10</small></div>
+              <div class="architecture-node"><strong>Retrieve</strong><small>BGE-M3 → FAISS HNSW · Top-10</small></div>
               <span class="architecture-arrow" aria-hidden="true">↓</span>
               <div class="architecture-node"><strong>Evidence gate</strong><small>Top-1 ≥ 0.67 or consistency rescue</small></div>
               <span class="architecture-arrow" aria-hidden="true">↓</span>
@@ -147,7 +147,7 @@
           <ol class="stage-list" id="stage-list">
             <li data-stage="Transcribing"><span>01</span><strong>Transcribing</strong><small>Voice only · Saaras v3</small></li>
             <li data-stage="Checking query"><span>02</span><strong>Checking query</strong><small>Validate + route</small></li>
-            <li data-stage="Retrieving evidence"><span>03</span><strong>Retrieving evidence</strong><small>multilingual E5-small → FlatIP2</small></li>
+            <li data-stage="Retrieving evidence"><span>03</span><strong>Retrieving evidence</strong><small>BGE-M3 → HNSW</small></li>
             <li data-stage="Generating answer"><span>04</span><strong>Generating answer</strong><small>Groq · context only</small></li>
             <li data-stage="Validating grounding"><span>05</span><strong>Validating grounding</strong><small>Schema + citations</small></li>
             <li data-stage="Complete"><span>06</span><strong>Complete</strong><small>Response returned</small></li>
@@ -170,7 +170,7 @@
         </section>
       </main>
 
-      <footer><span><span class="footer-brand-mark">A</span> Anvaya · frozen stack · deterministic routing</span><span>Saaras v3 · multilingual E5-small · FAISS FlatIP2 · Groq</span></footer>
+      <footer><span><span class="footer-brand-mark">A</span> Anvaya · frozen stack · deterministic routing</span><span>Saaras v3 · BGE-M3 · FAISS HNSW · Groq</span></footer>
     </div>
     <script src="/static/app.js" defer></script>
   </body>

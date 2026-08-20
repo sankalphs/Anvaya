@@ -1,12 +1,13 @@
 {
-  "chunk_artifact": "data\\processed\\2c0dcd7c6bc9f61e\\chunks\\final-test-afd021d4b0104558.jsonl",
+  "chunk_artifact": "data\\processed\\2c0dcd7c6bc9f61e\\chunks\\serving-combined-fixed-128-bge-m3.jsonl",
   "chunking": {
-    "name": "fixed_size",
-    "overlap": 0,
-    "size": 128,
+    "max_words": 128,
+    "name": "fixed_words",
     "strategy": "fixed_words"
   },
   "class": "hh_goa_rag.retriever.ParentFaissRetriever",
+  "corpus_chunks": 20402,
+  "corpus_embedding_ms": 19497.9636,
   "index": {
     "ef_construction": 200,
     "ef_search": 128,
@@ -15,11 +16,12 @@
     "m": 32,
     "name": "faiss_hnsw"
   },
-  "index_artifact": "cache\\indexes\\final\\afd021d4b0104558\\retriever.faiss",
+  "index_artifact": "cache\\indexes\\serving-combined\\faiss_hnsw.faiss",
   "model": "BAAI/bge-m3",
   "model_cache_path": "cache\\models\\BAAI__bge-m3--5617a9f61b02",
-  "model_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+  "model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
   "normalization_method": "float32_l2_v1",
   "search_oversample": 20,
+  "serving_corpus": "dev_plus_test",
   "top_k": 10
 }

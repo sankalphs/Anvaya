@@ -1,4 +1,4 @@
-"""Build the multilingual E5 + FAISS FlatIP2 serving artifact from both KB splits."""
+"""Build the multilingual BGE-M3 + FAISS HNSW serving artifact from both KB splits."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ from hh_goa_rag.harness import FROZEN_RETRIEVAL, FROZEN_TOP_K
 from hh_goa_rag.io import read_jsonl, write_json, write_jsonl
 from hh_goa_rag.models import MODEL_SPECS, EmbeddingModel
 
-ROOT = Path("data/processed/23828c1c95c62c20")
-MODEL_CACHE = Path("cache/models/intfloat__multilingual-e5-small--614241f622f5")
-CHUNK_PATH = ROOT / "chunks/serving-combined-fixed-128-e5-small.jsonl"
-INDEX_PATH = Path("cache/indexes/serving-combined/faiss_flat_ip2.faiss")
+ROOT = Path("data/processed/2c0dcd7c6bc9f61e")
+MODEL_CACHE = Path("cache/models/BAAI__bge-m3--5617a9f61b02")
+CHUNK_PATH = ROOT / "chunks/serving-combined-fixed-128-bge-m3.jsonl"
+INDEX_PATH = Path("cache/indexes/serving-combined/faiss_hnsw.faiss")
 CONFIG_PATH = Path("results/final_retriever_config.json")
 
 
@@ -49,7 +49,9 @@ def main() -> None:
     finally:
         encoder.close()
 
-    index = faiss.IndexFlatL2(vectors.shape[1])
+    index = faiss.IndexHNSWFlat(vectors.shape[1], 32, faiss.METRIC_INNER_PRODUCT)
+    index.hnsw.efConstruction = 200
+    index.hnsw.efSearch = 128
     index.add(np.ascontiguousarray(vectors, dtype=np.float32))
     INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     faiss.write_index(index, str(INDEX_PATH))
@@ -68,9 +70,12 @@ def main() -> None:
                 "max_words": 128,
             },
             "index": {
-                "name": "faiss_flat_ip2",
+                "name": "faiss_hnsw",
                 "engine": "faiss",
-                "index_type": "flat_l2",
+                "index_type": "hnsw",
+                "m": 32,
+                "ef_construction": 200,
+                "ef_search": 128,
             },
             "normalization_method": "float32_l2_v1",
             "search_oversample": 20,
