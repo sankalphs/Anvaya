@@ -62,6 +62,7 @@ def cleanup_losing_models(
     return {
         "root": str(configured_root),
         "winner": winner,
+        "candidates": sorted(candidate_set),
         "removed": removed,
         "preserved": preserved,
         "skipped": skipped,

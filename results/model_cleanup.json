@@ -1,34 +1,32 @@
 {
+  "root": "cache\\models",
+  "winner": "BAAI/bge-m3",
+  "candidates": [
+    "Alibaba-NLP/gte-multilingual-base",
+    "BAAI/bge-m3",
+    "intfloat/multilingual-e5-base",
+    "jinaai/jina-embeddings-v3"
+  ],
+  "removed": [],
   "preserved": [
     {
-      "path": "cache\\models\\BAAI__bge-m3--5617a9f61b02",
-      "repository": "BAAI/bge-m3"
+      "repository": "BAAI/bge-m3",
+      "path": "cache\\models\\BAAI__bge-m3--5617a9f61b02"
     }
   ],
-  "removed": [
+  "skipped": [
     {
-      "bytes": 7795178236,
-      "path": "cache\\models\\ai4bharat__IndicBERT-v3-4B--6811db4c9be0",
-      "repository": "ai4bharat/IndicBERT-v3-4B"
+      "repository": "Alibaba-NLP/gte-multilingual-base",
+      "reason": "retained_for_reproducibility"
     },
     {
-      "bytes": 627847918,
-      "path": "cache\\models\\Alibaba-NLP__gte-multilingual-base--9bbca17d9273",
-      "repository": "Alibaba-NLP/gte-multilingual-base"
+      "repository": "intfloat/multilingual-e5-base",
+      "reason": "retained_for_reproducibility"
     },
     {
-      "bytes": 3378569811,
-      "path": "cache\\models\\intfloat__multilingual-e5-base--d12875059715",
-      "repository": "intfloat/multilingual-e5-base"
-    },
-    {
-      "bytes": 2306814231,
-      "path": "cache\\models\\jinaai__jina-embeddings-v3--ab036b023d30",
-      "repository": "jinaai/jina-embeddings-v3"
+      "repository": "jinaai/jina-embeddings-v3",
+      "reason": "retained_for_reproducibility"
     }
   ],
-  "removed_bytes": 14108410196,
-  "root": "cache\\models",
-  "skipped": [],
-  "winner": "BAAI/bge-m3"
+  "removed_bytes": 0
 }

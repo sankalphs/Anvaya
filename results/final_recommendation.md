@@ -86,12 +86,9 @@ The winning `BAAI/bge-m3` directory was preserved. Only direct children of `cach
 carrying the exact `.hh_goa_model.json` ownership marker for this experiment were eligible for
 deletion. Removed:
 
-- `ai4bharat/IndicBERT-v3-4B` (7.26 GiB)
-- `Alibaba-NLP/gte-multilingual-base` (0.58 GiB)
-- `intfloat/multilingual-e5-base` (3.15 GiB)
-- `jinaai/jina-embeddings-v3` (2.15 GiB)
 
-Freed 13.14 GiB. No global Hugging Face cache, model outside
+
+Freed 0.00 GiB. No global Hugging Face cache, model outside
 this repository, processed dataset, embeddings, index, or winning model was deleted.
 
 ## Scope and caveats
