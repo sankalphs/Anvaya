@@ -9,8 +9,8 @@ Browser microphone or upload
   → VoiceRAGHarness.handle_audio
       → Sarvam Saaras v3 STT
       → transcript validation and deterministic safety/topic routing
-      → BGE-M3 query embedding
-      → FAISS HNSW parent retrieval, Top-10
+      → multilingual E5-small query embedding
+      → FAISS FlatIP2 parent retrieval, Top-10
       → deterministic evidence-sufficiency gate
       → Groq `openai/gpt-oss-20b` with low reasoning and strict_context_only
       → citation/schema grounding validation
@@ -28,9 +28,9 @@ inside `VoiceRAGHarness` and its frozen components.
 | --- | --- |
 | STT | Sarvam Saaras v3, `transcribe` |
 | Audio contract | 16 kHz, mono, PCM16 WAV |
-| Retriever | `BAAI/bge-m3` |
-| Chunking | sentence packing, maximum 128 words |
-| Index | FAISS HNSW, `M=32`, `efConstruction=200`, `efSearch=128` |
+| Retriever | `intfloat/multilingual-e5-small` |
+| Chunking | fixed words, maximum 128 words |
+| Index | FAISS `faiss_flat_ip2` (`IndexFlatL2`, normalized to cosine-equivalent scores) |
 | Retrieval depth | Top-10 unique parents |
 | Evidence threshold | Top-1 ≥ 0.67 or frozen consistency rescue |
 | Generator | Groq `openai/gpt-oss-20b`, low reasoning, maximum 128 output tokens |
@@ -73,8 +73,8 @@ monotonic clock.
 
 ## Deployment boundary
 
-The Docker image includes the exact 2.3 GB project-local BGE-M3 cache, approximately 45 MB FAISS
-index, and approximately 9 MB chunk mapping. It runs one non-root Uvicorn worker and reports ready
+The Docker image includes the exact project-local E5-small cache, the FAISS index, and the chunk
+mapping. It runs one non-root Uvicorn worker and reports ready
 only after the secret and all artifacts validate and the harness loads. Remote deployment therefore
 requires a container host with enough image storage and memory; a static or edge-only host is not
 compatible with this Python/model runtime.

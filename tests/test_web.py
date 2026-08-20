@@ -16,7 +16,9 @@ class FakeWebHarness:
     def __init__(self) -> None:
         self.closed = False
 
-    def handle_audio(self, audio_path: Path, *, on_stage: Any) -> GuardrailResponse:
+    def handle_audio(
+        self, audio_path: Path, *, language_code: str = "hi-IN", on_stage: Any
+    ) -> GuardrailResponse:
         with wave.open(str(audio_path), "rb") as handle:
             assert handle.getframerate() == 16_000
             assert handle.getnchannels() == 1
@@ -52,7 +54,9 @@ class FakeWebHarness:
             },
         )
 
-    def handle_text(self, text: str, *, on_stage: Any) -> GuardrailResponse:
+    def handle_text(
+        self, text: str, *, language_code: str = "hi-IN", on_stage: Any
+    ) -> GuardrailResponse:
         assert text == "typed question"
         for stage in (
             "Checking query",
@@ -167,6 +171,22 @@ def test_text_endpoint_validates_payload() -> None:
     assert missing_text.json()["detail"] == "Text query must be a string"
     assert too_long.status_code == 422
     assert "2,000" in too_long.json()["detail"]
+
+
+def test_endpoints_validate_and_forward_language_code() -> None:
+    harness = FakeWebHarness()
+    with TestClient(_test_app(harness)) as client:
+        response = client.post(
+            "/api/query/text",
+            json={"text": "typed question", "language_code": "en-IN"},
+        )
+        invalid = client.post(
+            "/api/query/text",
+            json={"text": "typed question", "language_code": "xx-IN"},
+        )
+
+    assert response.status_code == 200
+    assert invalid.status_code == 422
 
 
 def test_health_and_frontend_are_served() -> None:

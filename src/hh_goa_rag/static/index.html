@@ -34,8 +34,8 @@
           <p class="hero-copy">Anvaya listens in your language, searches its knowledge base, and shows the evidence behind every answer. If the sources are not strong enough, it tells you plainly.</p>
           <div class="hero-trust-row" aria-label="System principles">
             <span><i class="trust-icon">◉</i> Evidence first</span>
-            <span><i class="trust-icon">⌁</i> Deterministic routes</span>
-            <span><i class="trust-icon">↗</i> Measured latency</span>
+            <span><i class="trust-icon">⌁</i> One frozen path</span>
+            <span><i class="trust-icon">↗</i> Measured boundaries</span>
           </div>
         </section>
 
@@ -46,12 +46,42 @@
                 <div class="section-label-row"><p class="section-label">01 / Ask</p><span class="live-pill">Ready when you are</span></div>
                 <h2 id="query-title">What would you like to know?</h2>
               </div>
-              <span class="format-chip"><span class="mini-wave" aria-hidden="true"></span> 16 kHz · mono · PCM16</span>
+              <span class="format-chip voice-only-format"><span class="mini-wave" aria-hidden="true"></span> 16 kHz · mono · PCM16</span>
             </div>
 
             <div class="input-mode" role="tablist" aria-label="Choose query input">
               <button class="mode-button active" id="voice-mode-button" type="button" role="tab" aria-selected="true">Voice <span>Speak or upload</span></button>
               <button class="mode-button" id="text-mode-button" type="button" role="tab" aria-selected="false">Text <span>Type a question</span></button>
+            </div>
+
+            <div class="language-control">
+              <label for="language-select">Question / voice language</label>
+              <select id="language-select" aria-describedby="language-hint">
+                <option value="hi-IN" selected>हिन्दी · Hindi</option>
+                <option value="en-IN">English</option>
+                <option value="bn-IN">বাংলা · Bengali</option>
+                <option value="gu-IN">ગુજરાતી · Gujarati</option>
+                <option value="kn-IN">ಕನ್ನಡ · Kannada</option>
+                <option value="ml-IN">മലയാളം · Malayalam</option>
+                <option value="mr-IN">मराठी · Marathi</option>
+                <option value="od-IN">ଓଡ଼ିଆ · Odia</option>
+                <option value="pa-IN">ਪੰਜਾਬੀ · Punjabi</option>
+                <option value="ta-IN">தமிழ் · Tamil</option>
+                <option value="te-IN">తెలుగు · Telugu</option>
+                <option value="as-IN">অসমীয়া · Assamese</option>
+                <option value="ur-IN">اردو · Urdu</option>
+                <option value="ne-IN">नेपाली · Nepali</option>
+                <option value="kok-IN">कोंकणी · Konkani</option>
+                <option value="ks-IN">कॉशुर · Kashmiri</option>
+                <option value="sd-IN">सिन्धी · Sindhi</option>
+                <option value="sa-IN">संस्कृतम् · Sanskrit</option>
+                <option value="sat-IN">संताली · Santali</option>
+                <option value="mni-IN">মৈতৈলোন্ · Manipuri</option>
+                <option value="brx-IN">बड़ो · Bodo</option>
+                <option value="mai-IN">मैथिली · Maithili</option>
+                <option value="doi-IN">डोगरी · Dogri</option>
+              </select>
+              <span id="language-hint">Used for voice transcription and recorded in the request trace.</span>
             </div>
 
             <div id="voice-input-panel">
@@ -89,50 +119,58 @@
 
           <aside class="transparency-card" id="transparency" aria-labelledby="transparency-title">
             <div class="aside-topline"><p class="section-label">Transparency</p><span class="lock-mark" aria-hidden="true">✦</span></div>
-            <h2 id="transparency-title">Nothing happens<br /><em>behind a curtain.</em></h2>
-            <p class="aside-intro">Your question moves through a fixed, visible path. Each checkpoint can allow, refuse, or stop the request.</p>
-            <ol class="how-list">
-              <li><span class="how-number">01</span><span><strong>Transcribe</strong><small>Your voice becomes text with Sarvam Saaras v3.</small></span></li>
-              <li><span class="how-number">02</span><span><strong>Check</strong><small>Guardrails decide whether the question fits the knowledge base.</small></span></li>
-              <li><span class="how-number">03</span><span><strong>Retrieve</strong><small>The closest passages are ranked and shown with scores.</small></span></li>
-              <li><span class="how-number">04</span><span><strong>Answer</strong><small>Generation is grounded in retrieved passages only.</small></span></li>
-            </ol>
-            <div class="aside-footer"><span class="footer-dot"></span><span>Every response includes its route, reason code, and measured timing.</span></div>
+            <h2 id="transparency-title">See every<br /><em>boundary.</em></h2>
+            <p class="aside-intro">Voice and text enter differently, then share the same frozen answer path. Early refusals stop at the boundary that made the decision.</p>
+            <div class="architecture-map" aria-label="Anvaya request architecture">
+              <div class="architecture-inputs">
+                <div class="architecture-node branch-node"><strong>Voice</strong><small>Saaras v3 STT</small></div>
+                <div class="architecture-node branch-node"><strong>Text</strong><small>Direct transcript</small></div>
+              </div>
+              <span class="architecture-arrow" aria-hidden="true">↓</span>
+              <div class="architecture-node"><strong>Guardrails</strong><small>Validate + deterministic route</small></div>
+              <span class="architecture-arrow" aria-hidden="true">↓</span>
+              <div class="architecture-node"><strong>Retrieve</strong><small>multilingual E5-small → FAISS FlatIP2 · Top-10</small></div>
+              <span class="architecture-arrow" aria-hidden="true">↓</span>
+              <div class="architecture-node"><strong>Evidence gate</strong><small>Top-1 ≥ 0.67 or consistency rescue</small></div>
+              <span class="architecture-arrow" aria-hidden="true">↓</span>
+              <div class="architecture-node"><strong>Generate + validate</strong><small>Groq · openai/gpt-oss-20b · strict_context_only</small></div>
+            </div>
+            <div class="aside-footer"><span class="footer-dot"></span><span>Every response exposes its route, reason code, sources, citations, and measured timings.</span></div>
           </aside>
         </section>
 
         <section class="progress-panel" id="progress-panel" aria-live="polite" hidden>
           <div class="progress-header">
-            <div><div class="section-label-row"><p class="section-label">Live trace</p><span class="trace-id" id="trace-label">One request · visible as it runs</span></div><h2 id="active-stage">Preparing audio</h2></div>
+            <div><div class="section-label-row"><p class="section-label">Live trace</p><span class="trace-id" id="trace-label">Voice path · observed stages only</span></div><h2 id="active-stage">Preparing audio</h2></div>
             <div class="processing-orbit" aria-hidden="true"></div>
           </div>
           <ol class="stage-list" id="stage-list">
-            <li data-stage="Transcribing"><span>01</span><strong>Transcribing</strong><small>Voice → text</small></li>
-            <li data-stage="Checking query"><span>02</span><strong>Checking query</strong><small>Guardrail route</small></li>
-            <li data-stage="Retrieving evidence"><span>03</span><strong>Retrieving evidence</strong><small>Top passages</small></li>
-            <li data-stage="Generating answer"><span>04</span><strong>Generating answer</strong><small>Context only</small></li>
-            <li data-stage="Validating grounding"><span>05</span><strong>Validating grounding</strong><small>Citation check</small></li>
-            <li data-stage="Complete"><span>06</span><strong>Complete</strong><small>Trace recorded</small></li>
+            <li data-stage="Transcribing"><span>01</span><strong>Transcribing</strong><small>Voice only · Saaras v3</small></li>
+            <li data-stage="Checking query"><span>02</span><strong>Checking query</strong><small>Validate + route</small></li>
+            <li data-stage="Retrieving evidence"><span>03</span><strong>Retrieving evidence</strong><small>multilingual E5-small → FlatIP2</small></li>
+            <li data-stage="Generating answer"><span>04</span><strong>Generating answer</strong><small>Groq · context only</small></li>
+            <li data-stage="Validating grounding"><span>05</span><strong>Validating grounding</strong><small>Schema + citations</small></li>
+            <li data-stage="Complete"><span>06</span><strong>Complete</strong><small>Response returned</small></li>
           </ol>
         </section>
 
         <section class="result-panel" id="result-panel" aria-live="polite" hidden>
-          <div class="result-topline"><div class="result-status"><span class="route-badge" id="route-badge">ANSWER</span><span class="result-caption">Final route</span></div><span class="latency" id="latency"></span></div>
+          <div class="result-topline"><div class="result-status"><span class="route-badge" id="route-badge">ANSWER</span><span class="result-caption" id="query-kind">Voice input · final route</span></div><span class="latency" id="latency"></span></div>
           <div class="transcript-block"><div class="block-heading"><p class="section-label">You asked</p><span class="visibility-label">Transcription shown in full</span></div><p id="transcript"></p></div>
-          <div class="answer-block"><div class="block-heading"><p class="section-label" id="answer-label">Answer</p><span class="visibility-label">Generated from cited evidence</span></div><p class="answer-text" id="answer"></p><p class="reason-code" id="reason-code"></p></div>
+          <div class="answer-block"><div class="block-heading"><p class="section-label" id="answer-label">Answer</p><span class="visibility-label" id="answer-visibility-label">Generated from cited evidence</span></div><p class="answer-text" id="answer"></p><p class="reason-code" id="reason-code"></p></div>
 
           <div class="evidence-block" id="evidence-block" hidden>
-            <div class="evidence-heading"><div><p class="section-label">Evidence</p><h3>What supports this answer</h3></div><span id="source-count"></span></div>
-            <p class="evidence-helper">Green-marked passages were cited by the answer. Expand any row to inspect the exact retrieved text.</p>
+            <div class="evidence-heading"><div><p class="section-label">Evidence gate</p><h3 id="evidence-title">What supports this answer</h3></div><span id="source-count"></span></div>
+            <p class="evidence-helper" id="evidence-helper">Green-marked passages were cited by the answer. Expand any row to inspect the exact retrieved text.</p>
             <div class="evidence-list" id="evidence-list"></div>
           </div>
 
-          <details class="technical-details"><summary><span>Open full request trace</span><span class="summary-note">Timings · retrieval IDs · implementation details <span aria-hidden="true">+</span></span></summary><div class="technical-content"><div class="metric-grid" id="metric-grid"></div><div class="retrieved-ids"><p class="section-label">Retrieved IDs</p><div id="retrieved-ids"></div></div></div></details>
+          <details class="technical-details"><summary><span>Open full request trace</span><span class="summary-note">STT · validation · embedding · retrieval · generation <span aria-hidden="true">+</span></span></summary><div class="technical-content"><div class="metric-grid" id="metric-grid"></div><div class="retrieved-ids"><p class="section-label">Retrieved parent IDs</p><div id="retrieved-ids"></div></div></div></details>
           <button class="secondary-button" id="new-query-button" type="button">Ask another question <span aria-hidden="true">↗</span></button>
         </section>
       </main>
 
-      <footer><span><span class="footer-brand-mark">A</span> Anvaya · frozen stack · deterministic routing</span><span>Sarvam · BGE-M3 · FAISS HNSW</span></footer>
+      <footer><span><span class="footer-brand-mark">A</span> Anvaya · frozen stack · deterministic routing</span><span>Saaras v3 · multilingual E5-small · FAISS FlatIP2 · Groq</span></footer>
     </div>
     <script src="/static/app.js" defer></script>
   </body>

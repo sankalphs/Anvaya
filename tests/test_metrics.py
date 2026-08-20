@@ -1,6 +1,11 @@
 import pytest
 
-from hh_goa_rag.metrics import evaluate_rankings, latency_percentiles, qrels_by_query
+from hh_goa_rag.metrics import (
+    evaluate_rankings,
+    evaluate_rankings_by_language,
+    latency_percentiles,
+    qrels_by_query,
+)
 
 
 def test_metrics_with_multiple_relevant_parents() -> None:
@@ -23,3 +28,11 @@ def test_qrels_and_latency_helpers() -> None:
     assert stats["p50_ms"] == pytest.approx(2.5)
     assert stats["p100_ms"] == 4
 
+
+def test_metrics_are_reported_per_language_without_query_id_collisions() -> None:
+    qrels = {"hi:1": {"a"}, "ta:1": {"b"}}
+    rankings = {"hi:1": ["a"], "ta:1": ["x", "b"]}
+    result = evaluate_rankings_by_language(rankings, qrels)
+    assert sorted(result) == ["hi", "ta"]
+    assert result["hi"]["mrr_at_10"] == 1.0
+    assert result["ta"]["mrr_at_10"] == 0.5

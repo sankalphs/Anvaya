@@ -20,7 +20,7 @@ from typing import Any
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Request, Response, UploadFile, status
+from fastapi import FastAPI, Form, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -36,6 +36,31 @@ MAX_CONCURRENT_REQUESTS = 1
 MAX_REQUEST_BODY_BYTES = MAX_AUDIO_BYTES + 64 * 1024
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 STATIC_DIR = Path(__file__).with_name("static")
+SUPPORTED_LANGUAGES = {
+    "hi-IN": "हिन्दी",
+    "en-IN": "English",
+    "bn-IN": "বাংলা",
+    "gu-IN": "ગુજરાતી",
+    "kn-IN": "ಕನ್ನಡ",
+    "ml-IN": "മലയാളം",
+    "mr-IN": "मराठी",
+    "od-IN": "ଓଡ଼ିଆ",
+    "pa-IN": "ਪੰਜਾਬੀ",
+    "ta-IN": "தமிழ்",
+    "te-IN": "తెలుగు",
+    "as-IN": "অসমীয়া",
+    "ur-IN": "اردو",
+    "ne-IN": "नेपाली",
+    "kok-IN": "कोंकणी",
+    "ks-IN": "कॉशुर / कश्मीरी",
+    "sd-IN": "सिन्धी",
+    "sa-IN": "संस्कृतम्",
+    "sat-IN": "संताली",
+    "mni-IN": "মৈতৈলোন্",
+    "brx-IN": "बड़ो",
+    "mai-IN": "मैथिली",
+    "doi-IN": "डोगरी",
+}
 
 
 @dataclass(frozen=True)
@@ -262,9 +287,11 @@ def create_app(
         request: Request,
         response: Response,
         audio: UploadFile,
+        language_code: str = Form(default="hi-IN"),
         x_request_id: str | None = Header(default=None),
     ) -> dict[str, Any]:
         request_id = _validated_request_id(x_request_id)
+        language_code = _validated_language_code(language_code)
         response.headers["X-Request-ID"] = request_id
         _require_api_token(request, configured_settings.api_token)
         progress.start(request_id)
@@ -282,6 +309,7 @@ def create_app(
                     asyncio.to_thread(
                         harness.handle_audio,
                         temporary_path,
+                        language_code=language_code,
                         on_stage=lambda stage_name: progress.update(request_id, stage_name),
                     )
                 )
@@ -334,6 +362,7 @@ def create_app(
             if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
                 raise HTTPException(status_code=422, detail="Text query must be a string")
             text = payload["text"]
+            language_code = _validated_language_code(payload.get("language_code", "hi-IN"))
             if len(text) > MAX_TEXT_CHARS:
                 raise HTTPException(
                     status_code=422,
@@ -344,6 +373,7 @@ def create_app(
                     asyncio.to_thread(
                         harness.handle_text,
                         text,
+                        language_code=language_code,
                         on_stage=lambda stage_name: progress.update(request_id, stage_name),
                     )
                 )
@@ -379,6 +409,15 @@ def _validated_request_id(value: str | None) -> str:
     import secrets
 
     return secrets.token_urlsafe(16)
+
+
+def _validated_language_code(value: object) -> str:
+    if not isinstance(value, str) or value not in SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported language_code; choose one of the listed Saaras languages",
+        )
+    return value
 
 
 async def _save_upload(upload: UploadFile) -> Path:

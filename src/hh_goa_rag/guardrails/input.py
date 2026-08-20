@@ -67,11 +67,29 @@ _UNSAFE_RULES: tuple[tuple[ReasonCode, tuple[str, ...]], ...] = (
 _OFF_TOPIC_RULES: tuple[tuple[ReasonCode, tuple[str, ...]], ...] = (
     (
         ReasonCode.OFF_TOPIC_CREATIVE_WRITING,
-        ("कविता लिख", "कहानी लिख", "write a poem", "write a story"),
+        (
+            "कविता लिख",
+            "कहानी लिख",
+            "write a poem",
+            "write a story",
+            "tell me a joke",
+            "make me laugh",
+            "चुटकुला सुनाओ",
+        ),
     ),
     (
         ReasonCode.OFF_TOPIC_LIVE_INFORMATION,
-        ("लाइव क्रिकेट", "live cricket", "live score", "आज का स्कोर"),
+        (
+            "लाइव क्रिकेट",
+            "live cricket",
+            "live score",
+            "आज का स्कोर",
+            "what is the weather",
+            "weather today",
+            "current weather",
+            "who won the 2026 world cup",
+            "आज का मौसम",
+        ),
     ),
     (
         ReasonCode.OFF_TOPIC_TRANSACTION,
@@ -94,16 +112,12 @@ class InputDecision:
 
 def validate_transcript(transcript: object) -> InputDecision:
     if not isinstance(transcript, str):
-        return InputDecision(
-            False, "", Route.STT_FAILURE, ReasonCode.TRANSCRIPT_INVALID_TYPE
-        )
+        return InputDecision(False, "", Route.STT_FAILURE, ReasonCode.TRANSCRIPT_INVALID_TYPE)
     normalized = " ".join(transcript.split()).strip()
     if not normalized:
         return InputDecision(False, "", Route.STT_FAILURE, ReasonCode.TRANSCRIPT_EMPTY)
     if len(normalized) > MAX_TRANSCRIPT_CHARS:
-        return InputDecision(
-            False, normalized, Route.STT_FAILURE, ReasonCode.TRANSCRIPT_TOO_LONG
-        )
+        return InputDecision(False, normalized, Route.STT_FAILURE, ReasonCode.TRANSCRIPT_TOO_LONG)
     tokens = [_clean_token(token) for token in normalized.split()]
     informative = [token for token in tokens if token and token not in _FILLERS]
     alphanumeric_chars = sum(character.isalnum() for token in informative for character in token)

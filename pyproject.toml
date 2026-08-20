@@ -44,6 +44,7 @@ app = [
   "faiss-cpu>=1.10",
   "h2>=4.2,<5",
   "httpx>=0.28,<1",
+  "indic-transliteration>=2.3",
   "python-dotenv>=1.2",
   "sarvamai==0.1.30",
   "sentence-transformers>=4.0",
@@ -54,6 +55,9 @@ web = [
   "fastapi>=0.115,<1",
   "python-multipart>=0.0.20,<1",
   "uvicorn[standard]>=0.34,<1",
+]
+orchestration = [
+  "langgraph>=0.6,<2",
 ]
 dev = [
   "pytest>=8.3",

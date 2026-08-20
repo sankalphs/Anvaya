@@ -15,7 +15,11 @@ import torch
 from hh_goa_rag.chunking import chunk_corpus
 from hh_goa_rag.config import stable_fingerprint
 from hh_goa_rag.io import read_jsonl, write_json, write_jsonl
-from hh_goa_rag.metrics import evaluate_rankings, qrels_by_query
+from hh_goa_rag.metrics import (
+    evaluate_rankings,
+    evaluate_rankings_by_language,
+    qrels_by_query,
+)
 from hh_goa_rag.models import MODEL_SPECS, EmbeddingModel, acquire_model
 from hh_goa_rag.reporting import markdown_table, write_csv
 from hh_goa_rag.retrieval import build_flat_ip, search_parent_rankings
@@ -147,6 +151,7 @@ def _run_one(
         warmup_queries=int(retrieval["warmup_queries"]),
     )
     quality = evaluate_rankings(rankings, qrels)
+    language_quality = evaluate_rankings_by_language(rankings, qrels)
     del index
     result: dict[str, Any] = {
         "status": "ok",
@@ -160,6 +165,8 @@ def _run_one(
         "embedding_dimension": metadata["embedding_dimension"],
         "corpus_chunks": len(chunks),
         **quality,
+        "language_metrics": json.dumps(language_quality, ensure_ascii=False, sort_keys=True),
+        "language_count": len(language_quality),
         "corpus_embedding_time_ms": metadata["corpus_embedding_time_ms"],
         "corpus_embedding_ms_per_chunk": metadata["corpus_embedding_ms_per_chunk"],
         "query_embedding_mean_ms": metadata["query_embedding_latency"]["mean_ms"],

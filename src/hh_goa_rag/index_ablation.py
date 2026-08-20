@@ -15,7 +15,11 @@ from hh_goa_rag.config import stable_fingerprint
 from hh_goa_rag.embedding_ablation import resolve_data_dir
 from hh_goa_rag.index_backends import run_chroma_local, run_faiss, run_qdrant_local
 from hh_goa_rag.io import read_jsonl, write_json
-from hh_goa_rag.metrics import evaluate_rankings, qrels_by_query
+from hh_goa_rag.metrics import (
+    evaluate_rankings,
+    evaluate_rankings_by_language,
+    qrels_by_query,
+)
 from hh_goa_rag.reporting import markdown_table, write_csv
 from hh_goa_rag.retrieval import l2_normalize
 
@@ -119,6 +123,7 @@ def run_index_ablation(
         else:
             raise ValueError(f"Unsupported index engine: {backend['engine']}")
         quality = evaluate_rankings(result.rankings, qrels)
+        language_quality = evaluate_rankings_by_language(result.rankings, qrels)
         row: dict[str, Any] = {
             "status": "ok",
             "backend": name,
@@ -137,6 +142,10 @@ def run_index_ablation(
             "corpus_vectors": len(corpus_vectors),
             "embedding_dimension": int(corpus_vectors.shape[1]),
             **quality,
+            "language_metrics": json.dumps(
+                language_quality, ensure_ascii=False, sort_keys=True
+            ),
+            "language_count": len(language_quality),
             "retrieval_mean_ms": result.latency["mean_ms"],
             "retrieval_p50_ms": result.latency["p50_ms"],
             "retrieval_p70_ms": result.latency["p70_ms"],
