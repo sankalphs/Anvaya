@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import shutil
 from datetime import UTC, datetime
 from pathlib import Path
@@ -66,6 +67,7 @@ def main() -> None:
     elif args.phase == "topk":
         if not args.model:
             parser.error("--phase topk requires the model selected by blinded human review")
+        _require_selected(Path("results/generation_model_ablation.csv"), "model", args.model)
         configurations = [(value, "structured_evidence_ids") for value in (1, 3, 5, 10)]
         raw_path = run_dir / "topk_outputs.jsonl"
         observations = run_configuration_ablation(
@@ -82,6 +84,8 @@ def main() -> None:
     else:
         if not args.model or args.top_k is None:
             parser.error("--phase prompt requires the human-selected --model and --top-k")
+        _require_selected(Path("results/generation_model_ablation.csv"), "model", args.model)
+        _require_selected(Path("results/generation_topk_ablation.csv"), "top_k", str(args.top_k))
         configurations = [
             (args.top_k, variant)
             for variant in (
@@ -107,13 +111,23 @@ def main() -> None:
         contexts,
         judgment_path,
         run_dir / "blind_mapping.jsonl",
+        experiment_id=args.phase,
     )
     print(f"Cached contexts: {args.context_cache}")
     print(f"Raw observations: {raw_path}")
     print(f"Completed phase: {args.phase}")
     print("Blinded review sheet: results/generation_blinded_judgments.csv")
+    print(f"Blind mapping (do not inspect before review): {run_dir / 'blind_mapping.jsonl'}")
     if args.phase == "model":
         print("Top-K and prompt ablations are gated on completed human model review.")
+
+
+def _require_selected(path: Path, field: str, requested: str) -> None:
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    selected = [row for row in rows if row.get("selected", "").lower() == "true"]
+    if len(selected) != 1 or selected[0].get(field) != requested:
+        raise RuntimeError(f"{requested!r} is not the human-quality winner recorded in {path}")
 
 
 if __name__ == "__main__":
