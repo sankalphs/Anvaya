@@ -39,6 +39,20 @@ generation = [
   "httpx>=0.28,<1",
   "python-dotenv>=1.2",
 ]
+app = [
+  "faiss-cpu>=1.10",
+  "httpx>=0.28,<1",
+  "python-dotenv>=1.2",
+  "sarvamai==0.1.30",
+  "sentence-transformers>=4.0",
+  "torch>=2.6",
+  "transformers>=4.51",
+]
+web = [
+  "fastapi>=0.115,<1",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn[standard]>=0.34,<1",
+]
 dev = [
   "pytest>=8.3",
   "ruff>=0.11",
@@ -46,6 +60,7 @@ dev = [
 
 [project.scripts]
 hh-goa-ablate = "hh_goa_rag.cli:main"
+hh-goa-demo = "hh_goa_rag.web:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hh_goa_rag"]
