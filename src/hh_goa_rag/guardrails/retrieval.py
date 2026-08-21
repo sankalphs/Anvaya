@@ -22,6 +22,9 @@ TOP_SCORE_THRESHOLD = 0.67
 CONSISTENCY_RESCUE_FLOOR = 0.64
 TOP_TWO_MAX_GAP = 0.005
 TOP_TO_FIFTH_MIN_SPREAD = 0.12
+QUERY_CORROBORATION_FLOOR = 0.50
+QUERY_CORROBORATION_MEAN_FLOOR = 0.50
+QUERY_CORROBORATION_CONTEXTS = 2
 _QUERY_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 _QUERY_STOPWORDS = {
     "a",
@@ -89,14 +92,20 @@ def evidence_sufficiency(
     query: str | None = None,
     top_score_threshold: float = TOP_SCORE_THRESHOLD,
 ) -> RetrievalSignals:
-    scores = [float(_field(context, "score")) for context in contexts]
+    # Hybrid retrieval order is not necessarily descending by dense score.
+    # Keep the development-selected semantic thresholds on their original
+    # signal distribution by computing them from sorted dense similarities.
+    scores = sorted(
+        (float(_field(context, "score")) for context in contexts), reverse=True
+    )
     if not scores:
         return RetrievalSignals(False, ReasonCode.RETRIEVAL_EMPTY, None, None, None, None, "empty")
     top = scores[0]
     gap = top - scores[1] if len(scores) >= 2 else None
     spread = top - scores[4] if len(scores) >= 5 else None
     mean3 = sum(scores[:3]) / min(3, len(scores))
-    if query is not None and not _query_has_evidence_overlap(query, contexts):
+    overlap_count = _query_overlap_count(query, contexts) if query is not None else 0
+    if query is not None and overlap_count == 0:
         return RetrievalSignals(
             False,
             ReasonCode.RETRIEVAL_LOW_CONFIDENCE,
@@ -116,6 +125,15 @@ def evidence_sufficiency(
     )
     if dominant:
         return RetrievalSignals(True, None, top, gap, spread, mean3, "top_to_fifth_spread")
+    multilingual_corroborated = (
+        query is not None
+        and overlap_count is not None
+        and overlap_count >= QUERY_CORROBORATION_CONTEXTS
+        and top >= QUERY_CORROBORATION_FLOOR
+        and mean3 >= QUERY_CORROBORATION_MEAN_FLOOR
+    )
+    if multilingual_corroborated:
+        return RetrievalSignals(True, None, top, gap, spread, mean3, "query_term_corroboration")
     return RetrievalSignals(
         False,
         ReasonCode.RETRIEVAL_LOW_CONFIDENCE,
@@ -132,6 +150,13 @@ def _field(value: Any, name: str) -> Any:
 
 
 def _query_has_evidence_overlap(query: str, contexts: Sequence[Any]) -> bool:
+    return bool(_query_overlap_count(query, contexts) or 0)
+
+
+def _query_overlap_count(query: str | None, contexts: Sequence[Any]) -> int | None:
+    if query is None:
+        return None
+
     def tokens(value: str) -> set[str]:
         normalized = unicodedata.normalize("NFKC", value).casefold()
         return {
@@ -142,45 +167,49 @@ def _query_has_evidence_overlap(query: str, contexts: Sequence[Any]) -> bool:
 
     query_terms = tokens(query)
     if not query_terms:
-        return True
-    evidence_terms = tokens(" ".join(str(_field(context, "text")) for context in contexts[:5]))
-    if query_terms & evidence_terms:
-        return True
+        return None
 
-    # Hindi/Indic KB text often joins or separates the same named entity
-    # differently (for example, ``सिरियस एक्सएम`` vs ``सिरियसएक्सएम``).
-    # Compare a compact form as a secondary check without weakening the
-    # primary token-overlap guardrail.
-    compact_query = "".join(query_terms)
-    compact_evidence = "".join(evidence_terms)
-    if len(compact_query) >= 4 and compact_query in compact_evidence:
-        return True
+    def context_matches(context: Any) -> bool:
+        evidence_terms = tokens(str(_field(context, "text")))
+        if query_terms & evidence_terms:
+            return True
 
-    if transliterate is None or sanscript is None:
-        return False
-    try:
-        romanized = transliterate(
-            " ".join(str(_field(context, "text")) for context in contexts[:5]),
-            sanscript.DEVANAGARI,
-            sanscript.ITRANS,
-        )
-    except (TypeError, ValueError):
-        return False
+        # Hindi/Indic KB text often joins or separates the same named entity
+        # differently (for example, ``सिरियस एक्सएम`` vs ``सिरियसएक्सएम``).
+        # Compare a compact form as a secondary check without weakening the
+        # primary token-overlap guardrail.
+        compact_query = "".join(query_terms)
+        compact_evidence = "".join(evidence_terms)
+        if len(compact_query) >= 4 and compact_query in compact_evidence:
+            return True
 
-    romanized_terms = tokens(romanized)
-    for query_term in query_terms:
-        if len(query_term) < 5:
-            continue
-        query_skeleton = _phonetic_skeleton(query_term)
-        if len(query_skeleton) < 3:
-            continue
-        for evidence_term in romanized_terms:
-            evidence_skeleton = _phonetic_skeleton(evidence_term)
-            if len(evidence_skeleton) < 3:
+        if transliterate is None or sanscript is None:
+            return False
+        try:
+            romanized = transliterate(
+                str(_field(context, "text")),
+                sanscript.DEVANAGARI,
+                sanscript.ITRANS,
+            )
+        except (TypeError, ValueError):
+            return False
+
+        romanized_terms = tokens(romanized)
+        for query_term in query_terms:
+            if len(query_term) < 5:
                 continue
-            if SequenceMatcher(None, query_skeleton, evidence_skeleton).ratio() >= 0.66:
-                return True
-    return False
+            query_skeleton = _phonetic_skeleton(query_term)
+            if len(query_skeleton) < 3:
+                continue
+            for evidence_term in romanized_terms:
+                evidence_skeleton = _phonetic_skeleton(evidence_term)
+                if len(evidence_skeleton) < 3:
+                    continue
+                if SequenceMatcher(None, query_skeleton, evidence_skeleton).ratio() >= 0.66:
+                    return True
+        return False
+
+    return sum(context_matches(context) for context in contexts[:5])
 
 
 def _phonetic_skeleton(value: str) -> str:

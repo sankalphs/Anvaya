@@ -4,12 +4,14 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from hh_goa_rag.generation import GenerationContext
 from hh_goa_rag.guardrails import ReasonCode, Route
 from hh_goa_rag.guardrails.types import STAGE_NAMES
 from hh_goa_rag.harness import (
     FROZEN_PROMPT,
     FROZEN_TOP_K,
     VoiceRAGHarness,
+    _extractive_kb_fallback,
 )
 
 
@@ -173,6 +175,86 @@ def test_invalid_model_output_falls_back_to_verbatim_kb_evidence() -> None:
     assert response.answer == "evidence 1"
     assert response.citations == ("p-1",)
     assert response.metadata["generation"]["fallback"] == "extractive_kb"
+
+
+def test_fast_extractive_path_skips_provider_generation() -> None:
+    generator = FakeGenerator()
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(),
+        retriever=FakeRetriever(),
+        generator=generator,
+        fast_extractive=True,
+    )
+
+    response = harness.handle_text("गोल्डस्मिथ टेक्सास किस काउंटी में है")
+
+    assert response.route == Route.ANSWER
+    assert generator.calls == 0
+    assert response.answer in response.metadata["retrieved"][1]["text"]
+    assert response.citations == ("p-2",)
+    assert response.metadata["generation"]["answer_mode"] == "extractive_fast_path"
+
+
+def test_selected_output_language_bypasses_verbatim_extractive_shortcut() -> None:
+    class LanguageAwareFakeGenerator(FakeGenerator):
+        def __init__(self) -> None:
+            super().__init__()
+            self.language_code: str | None = None
+
+        def generate(
+            self,
+            question: str,
+            contexts: list[Any],
+            *,
+            prompt_variant: str,
+            language_code: str | None = None,
+        ) -> dict[str, object]:
+            self.language_code = language_code
+            return super().generate(question, contexts, prompt_variant=prompt_variant)
+
+    generator = LanguageAwareFakeGenerator()
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(),
+        retriever=FakeRetriever(),
+        generator=generator,
+        fast_extractive=True,
+    )
+
+    response = harness.handle_text(
+        "गोल्डस्मिथ टेक्सास किस काउंटी में है",
+        language_code="en-IN",
+    )
+
+    assert response.route == Route.ANSWER
+    assert generator.calls == 1
+    assert generator.language_code == "en-IN"
+    assert response.metadata["generation"]["answer_mode"] == "model_generated"
+
+
+def test_fallback_only_uses_selected_output_language_evidence() -> None:
+    contexts = [
+        GenerationContext(
+            parent_id="p-hi",
+            chunk_id="c-hi",
+            text="यह हिंदी स्रोत है।",
+            rank=1,
+            score=0.9,
+            language="hi",
+        ),
+        GenerationContext(
+            parent_id="p-en",
+            chunk_id="c-en",
+            text="This is the English source.",
+            rank=2,
+            score=0.8,
+            language="en",
+        ),
+    ]
+
+    assert _extractive_kb_fallback(contexts, language_code="en-IN") == (
+        "This is the English source.",
+        "p-en",
+    )
 
 
 def test_component_exception_fails_closed() -> None:

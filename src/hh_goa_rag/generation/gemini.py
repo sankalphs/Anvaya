@@ -67,8 +67,14 @@ class GeminiGeneration:
         contexts: Sequence[GenerationContext | dict[str, Any]],
         *,
         prompt_variant: PromptVariant = "structured_evidence_ids",
+        language_code: str | None = None,
     ) -> dict[str, Any]:
-        messages = build_messages(question, contexts, variant=prompt_variant)
+        messages = build_messages(
+            question,
+            contexts,
+            variant=prompt_variant,
+            language_code=language_code,
+        )
         allowed_ids = {str(_field(context, "parent_id", "")) for context in contexts}
         body = {
             "systemInstruction": {"parts": [{"text": messages[0]["content"]}]},
