@@ -133,13 +133,14 @@ def chunk_corpus(
                 "strategy": strategy,
                 "text": text,
             }
-            chunks.append(
-                {
-                    "chunk_id": f"c-{stable_fingerprint(identity, 24)}",
-                    "parent_id": parent["passage_id"],
-                    "position": position,
-                    "granularity": granularity,
-                    "text": text,
-                }
-            )
+            chunk = {
+                "chunk_id": f"c-{stable_fingerprint(identity, 24)}",
+                "parent_id": parent["passage_id"],
+                "position": position,
+                "granularity": granularity,
+                "text": text,
+            }
+            if parent.get("language"):
+                chunk["language"] = str(parent["language"])
+            chunks.append(chunk)
     return chunks

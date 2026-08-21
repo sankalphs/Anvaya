@@ -115,6 +115,34 @@ def test_retrieval_accepts_cross_script_entity_overlap() -> None:
     assert decision.sufficient is True
 
 
+def test_retrieval_accepts_multilingual_corroboration_below_global_score_threshold() -> None:
+    evidence = [
+        {
+            "parent_id": "p-1",
+            "chunk_id": "c-1",
+            "text": "द मैनहट्टन प्रोजेक्ट का उद्देश्य परमाणु बम बनाना था।",
+            "score": 0.57,
+        },
+        {
+            "parent_id": "p-2",
+            "chunk_id": "c-2",
+            "text": "मैनहट्टन परियोजना द्वितीय विश्व युद्ध के दौरान एक अनुसंधान उपक्रम था।",
+            "score": 0.53,
+        },
+        {
+            "parent_id": "p-3",
+            "chunk_id": "c-3",
+            "text": "मैनहट्टन परियोजना ने पहले परमाणु हथियारों का निर्माण किया।",
+            "score": 0.52,
+        },
+    ]
+
+    decision = evidence_sufficiency(evidence, query="manhattan project")
+
+    assert decision.sufficient is True
+    assert decision.decision_rule == "query_term_corroboration"
+
+
 def generation(
     *,
     answer_status: str = "ANSWER",

@@ -23,24 +23,34 @@ const elements = {
   voiceInputPanel: document.querySelector("#voice-input-panel"),
   textInputPanel: document.querySelector("#text-input-panel"),
   textQuery: document.querySelector("#text-query"),
+  promptChips: document.querySelectorAll(".prompt-chip"),
   textCount: document.querySelector("#text-count"),
   textSubmitButton: document.querySelector("#text-submit-button"),
   languageSelect: document.querySelector("#language-select"),
+  languageDropdownButton: null,
+  languageDropdownMenu: null,
   formatChip: document.querySelector(".voice-only-format"),
   alert: document.querySelector("#alert"),
+  queryPanel: document.querySelector(".query-panel"),
   progressPanel: document.querySelector("#progress-panel"),
+  progressDetail: document.querySelector("#progress-detail"),
   activeStage: document.querySelector("#active-stage"),
   traceLabel: document.querySelector("#trace-label"),
   stageList: document.querySelector("#stage-list"),
   resultPanel: document.querySelector("#result-panel"),
   routeBadge: document.querySelector("#route-badge"),
   latency: document.querySelector("#latency"),
+  requestId: document.querySelector("#request-id"),
   transcript: document.querySelector("#transcript"),
   queryKind: document.querySelector("#query-kind"),
   answerLabel: document.querySelector("#answer-label"),
   answerVisibilityLabel: document.querySelector("#answer-visibility-label"),
   answer: document.querySelector("#answer"),
   reasonCode: document.querySelector("#reason-code"),
+  answerExplainer: document.querySelector("#answer-explainer"),
+  groundingBadge: document.querySelector("#grounding-badge"),
+  groundingSummary: document.querySelector("#grounding-summary"),
+  answerExplanation: document.querySelector("#answer-explanation"),
   evidenceBlock: document.querySelector("#evidence-block"),
   evidenceTitle: document.querySelector("#evidence-title"),
   evidenceHelper: document.querySelector("#evidence-helper"),
@@ -66,13 +76,105 @@ const recording = {
 let progressRequestId = null;
 let lastQueryKind = "voice";
 
+function pinAmbientDecorationsToViewport() {
+  const viewportRoot = document.documentElement;
+  document.querySelectorAll(".ambient").forEach((ambient) => {
+    if (ambient.parentElement !== viewportRoot) viewportRoot.appendChild(ambient);
+  });
+}
+
+pinAmbientDecorationsToViewport();
+
+function initializeLanguageDropdown() {
+  const select = elements.languageSelect;
+  if (!select || select.dataset.customized === "true") return;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "language-select-wrap";
+  select.parentNode.insertBefore(wrapper, select);
+  wrapper.appendChild(select);
+  select.classList.add("native-language-select");
+  select.dataset.customized = "true";
+
+  const button = document.createElement("button");
+  button.className = "language-dropdown-button";
+  button.type = "button";
+  button.setAttribute("aria-haspopup", "listbox");
+  button.setAttribute("aria-expanded", "false");
+  button.innerHTML = '<span class="language-dropdown-value"></span><span class="language-dropdown-arrow" aria-hidden="true">⌄</span>';
+
+  const menu = document.createElement("div");
+  menu.className = "language-dropdown-menu";
+  menu.setAttribute("role", "listbox");
+  menu.hidden = true;
+
+  [...select.options].forEach((option) => {
+    const item = document.createElement("button");
+    item.className = "language-dropdown-option";
+    item.type = "button";
+    item.dataset.value = option.value;
+    item.setAttribute("role", "option");
+    item.textContent = option.textContent;
+    item.addEventListener("click", () => {
+      select.value = option.value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      closeMenu();
+    });
+    menu.appendChild(item);
+  });
+
+  wrapper.append(button, menu);
+  elements.languageDropdownButton = button;
+  elements.languageDropdownMenu = menu;
+
+  function syncLanguageDropdown() {
+    const selected = select.options[select.selectedIndex];
+    button.querySelector(".language-dropdown-value").textContent = selected?.textContent || "Select language";
+    menu.querySelectorAll(".language-dropdown-option").forEach((item) => {
+      const active = item.dataset.value === select.value;
+      item.classList.toggle("selected", active);
+      item.setAttribute("aria-selected", String(active));
+    });
+  }
+
+  function closeMenu() {
+    menu.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  }
+
+  button.addEventListener("click", () => {
+    if (button.disabled) return;
+    const opening = menu.hidden;
+    menu.hidden = !opening;
+    button.setAttribute("aria-expanded", String(opening));
+  });
+  select.addEventListener("change", syncLanguageDropdown);
+  document.addEventListener("click", (event) => {
+    if (!wrapper.contains(event.target)) closeMenu();
+  });
+  syncLanguageDropdown();
+}
+
+initializeLanguageDropdown();
+
 elements.recordButton.addEventListener("click", startRecording);
 elements.stopButton.addEventListener("click", () => stopRecording(true));
 elements.upload.addEventListener("change", handleUpload);
 elements.voiceModeButton.addEventListener("click", () => setInputMode("voice"));
 elements.textModeButton.addEventListener("click", () => setInputMode("text"));
 elements.textQuery.addEventListener("input", updateTextCount);
+elements.textQuery.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submitText();
+});
 elements.textSubmitButton.addEventListener("click", submitText);
+elements.promptChips.forEach((chip) => {
+  chip.addEventListener("click", () => {
+    elements.textQuery.value = chip.dataset.prompt || "";
+    updateTextCount();
+    setInputMode("text");
+    elements.textQuery.focus({ preventScroll: true });
+  });
+});
 elements.newQueryButton.addEventListener("click", resetForNewQuery);
 window.addEventListener("pagehide", releaseMicrophone);
 
@@ -89,7 +191,6 @@ function setInputMode(mode) {
   elements.textInputPanel.hidden = !textMode;
   elements.formatChip.hidden = textMode;
   clearAlert();
-  if (textMode) window.setTimeout(() => elements.textQuery.focus(), 0);
 }
 
 function updateTextCount() {
@@ -111,7 +212,7 @@ async function checkHealth() {
 
 async function startRecording() {
   clearAlert();
-  elements.resultPanel.hidden = true;
+  preserveViewport(() => { elements.resultPanel.hidden = true; });
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     showAlert("Microphone capture is not supported in this browser. Try uploading audio instead.");
     return;
@@ -252,7 +353,11 @@ async function handleUpload(event) {
     await submitAudio(encodePcm16Wav(pcm, TARGET_SAMPLE_RATE));
   } catch (error) {
     setInputDisabled(false);
-    elements.progressPanel.hidden = true;
+    preserveViewport(() => {
+      elements.progressPanel.hidden = true;
+      elements.progressPanel.setAttribute("aria-busy", "false");
+      elements.queryPanel.setAttribute("aria-busy", "false");
+    });
     handleUserError(error, "The audio file could not be decoded. Try WAV, MP3, M4A, or WebM.");
   }
 }
@@ -260,10 +365,14 @@ async function handleUpload(event) {
 async function submitAudio(wavBlob) {
   clearAlert();
   setInputDisabled(true);
-  elements.resultPanel.hidden = true;
-  resetStages();
-  elements.progressPanel.hidden = false;
-  elements.activeStage.textContent = "Preparing audio";
+  preserveViewport(() => {
+    elements.resultPanel.hidden = true;
+    resetStages();
+    elements.progressPanel.hidden = false;
+    elements.progressPanel.setAttribute("aria-busy", "true");
+    elements.queryPanel.setAttribute("aria-busy", "true");
+    elements.activeStage.textContent = "Preparing audio";
+  });
   lastQueryKind = "voice";
   elements.traceLabel.textContent = "Voice path · observed stages only";
   const requestId = makeRequestId();
@@ -282,15 +391,22 @@ async function submitAudio(wavBlob) {
     if (!response.ok) {
       throw new UserFacingError(payload.detail || "The backend could not process this audio.");
     }
+    payload.request_id = response.headers.get("X-Request-ID") || requestId;
     progressRequestId = null;
     await showFinalProgress(requestId);
     renderResult(payload);
   } catch (error) {
     progressRequestId = null;
-    elements.progressPanel.hidden = true;
+    preserveViewport(() => {
+      elements.progressPanel.hidden = true;
+      elements.progressPanel.setAttribute("aria-busy", "false");
+      elements.queryPanel.setAttribute("aria-busy", "false");
+    });
     handleUserError(error, "The backend could not process the request. Please try again.");
   } finally {
     setInputDisabled(false);
+    elements.progressPanel.setAttribute("aria-busy", "false");
+    elements.queryPanel.setAttribute("aria-busy", "false");
   }
 }
 
@@ -303,10 +419,14 @@ async function submitText() {
     return;
   }
   setInputDisabled(true);
-  elements.resultPanel.hidden = true;
-  resetStages();
-  elements.progressPanel.hidden = false;
-  elements.activeStage.textContent = "Preparing text";
+  preserveViewport(() => {
+    elements.resultPanel.hidden = true;
+    resetStages();
+    elements.progressPanel.hidden = false;
+    elements.progressPanel.setAttribute("aria-busy", "true");
+    elements.queryPanel.setAttribute("aria-busy", "true");
+    elements.activeStage.textContent = "Preparing text";
+  });
   lastQueryKind = "text";
   elements.traceLabel.textContent = "Text path · STT skipped · observed stages only";
   const requestId = makeRequestId();
@@ -325,15 +445,22 @@ async function submitText() {
     if (!response.ok) {
       throw new UserFacingError(payload.detail || "The backend could not process this question.");
     }
+    payload.request_id = response.headers.get("X-Request-ID") || requestId;
     progressRequestId = null;
     await showFinalProgress(requestId);
     renderResult(payload);
   } catch (error) {
     progressRequestId = null;
-    elements.progressPanel.hidden = true;
+    preserveViewport(() => {
+      elements.progressPanel.hidden = true;
+      elements.progressPanel.setAttribute("aria-busy", "false");
+      elements.queryPanel.setAttribute("aria-busy", "false");
+    });
     handleUserError(error, "The backend could not process the question. Please try again.");
   } finally {
     setInputDisabled(false);
+    elements.progressPanel.setAttribute("aria-busy", "false");
+    elements.queryPanel.setAttribute("aria-busy", "false");
   }
 }
 
@@ -369,16 +496,24 @@ async function showFinalProgress(requestId) {
 function markProgress(progress) {
   const seen = new Set(progress.history || []);
   elements.activeStage.textContent = progress.stage || "Processing";
+  elements.progressDetail.textContent = progress.stage
+    ? `${progress.stage} · the request remains on this page while the next checkpoint is observed.`
+    : "Your question is moving through the visible checkpoints below.";
   elements.stageList.querySelectorAll("li").forEach((item) => {
     const stage = item.dataset.stage;
     item.classList.toggle("seen", seen.has(stage));
     item.classList.toggle("active", stage === progress.stage);
+    const skipped = lastQueryKind === "text" && stage === "Transcribing";
+    item.classList.toggle("skipped", skipped);
+    item.setAttribute("aria-label", skipped ? `${stage}, skipped for text input` : stage);
   });
 }
 
 function renderResult(data) {
-  window.setTimeout(() => {
+  preserveViewport(() => {
     elements.progressPanel.hidden = true;
+    elements.progressPanel.setAttribute("aria-busy", "false");
+    elements.queryPanel.setAttribute("aria-busy", "false");
     elements.resultPanel.hidden = false;
     elements.routeBadge.textContent = data.route || "SYSTEM_ERROR";
     elements.routeBadge.className = "route-badge";
@@ -387,18 +522,55 @@ function renderResult(data) {
       elements.routeBadge.classList.add("error");
     }
     elements.latency.textContent = `${formatMs(data.total_latency_ms)} measured request latency`;
+    elements.requestId.textContent = data.request_id ? `Trace ${data.request_id}` : "";
     elements.queryKind.textContent = `${lastQueryKind === "text" ? "Text" : "Voice"} input · final route`;
     elements.transcript.textContent = data.transcript || "No transcript was produced.";
     elements.answerLabel.textContent = data.route === "ANSWER" ? "Answer" : "Response";
+    const answerMode = data.metadata?.generation?.answer_mode;
     elements.answerVisibilityLabel.textContent = data.route === "ANSWER"
-      ? "Generated from cited evidence"
+      ? answerMode === "extractive_fallback"
+        ? "Quoted from retrieved evidence · model fallback"
+        : "Generated from cited evidence"
       : "No answer generated · retrieval evidence shown";
     elements.answer.textContent = responseText(data);
     elements.reasonCode.textContent = `Reason code · ${data.reason_code || "NONE"}`;
+    renderAnswerTransparency(data);
     renderEvidence(data);
     renderTechnicalDetails(data);
-    elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, 120);
+    elements.resultPanel.setAttribute("aria-busy", "false");
+    elements.resultPanel.focus({ preventScroll: true });
+  });
+}
+
+function renderAnswerTransparency(data) {
+  const evidence = data.metadata && Array.isArray(data.metadata.retrieved)
+    ? data.metadata.retrieved
+    : [];
+  const citations = new Set(data.citations || []);
+  const decision = data.metadata?.evidence_decision || {};
+  const generation = data.metadata?.generation || {};
+  const grounding = data.metadata?.grounding || {};
+  const isAnswer = data.route === "ANSWER";
+  const isGrounded = isAnswer && grounding.valid !== false && citations.size > 0;
+  elements.answerExplainer.hidden = false;
+  elements.groundingBadge.className = `signal-badge ${isGrounded ? "grounded" : "limited"}`;
+  elements.groundingBadge.textContent = isGrounded ? "Grounded" : "Guardrail decision";
+  if (isAnswer) {
+    const sourceWord = citations.size === 1 ? "source" : "sources";
+    const generationContextIds = data.metadata?.generation_context_ids || [];
+    elements.groundingSummary.textContent = `${citations.size} cited ${sourceWord} · ${evidence.length} retrieved · ${generationContextIds.length || Math.min(evidence.length, 3)} sent to model`;
+    const model = generation.model || "the configured local model";
+    const runtime = generation.runtime ? ` on ${generation.runtime}` : "";
+    if (generation.answer_mode === "extractive_fallback") {
+      elements.answerExplanation.textContent = `The model answer did not pass validation, so this is a direct passage from the retrieved knowledge base, not a fresh model summary. The failed check was ${generation.fallback_reason || "not disclosed"}. Open the evidence rows to inspect it.`;
+    } else {
+      elements.answerExplanation.textContent = `This answer passed the evidence and grounding checks. It was produced by ${model}${runtime}. Similarity scores and citations are signals, not calibrated truth or confidence scores. Open the evidence rows to inspect the exact passages.`;
+    }
+  } else {
+    const rule = decision.decision_rule ? ` Rule: ${decision.decision_rule}.` : "";
+    elements.groundingSummary.textContent = "No supported answer was generated";
+    elements.answerExplanation.textContent = `The system stopped before presenting an unsupported answer.${rule} Retrieved passages, when available, are shown below so you can see what was considered.`;
+  }
 }
 
 function responseText(data) {
@@ -470,6 +642,7 @@ function makeChip(text, className) {
 function renderTechnicalDetails(data) {
   elements.metricGrid.replaceChildren();
   const timings = data.stage_latencies_ms || {};
+  const checkpoints = data.latency_checkpoints || data.metadata?.latency_checkpoints || {};
   const metrics = [
     ["STT", lastQueryKind === "text" ? "Skipped" : timings.stt],
     ["Input check", timings.input_validation],
@@ -478,6 +651,15 @@ function renderTechnicalDetails(data) {
     ["Search", timings.vector_search ?? timings.retrieval],
     ["Evidence gate", timings.evidence_guardrail],
     [data.route === "ANSWER" ? "Generation" : "Generation decision", timings.generation],
+    ...(checkpoints.qwen_model_load_ms != null
+      ? [["Qwen load", checkpoints.qwen_model_load_ms]]
+      : []),
+    ...(checkpoints.qwen_generation_ms != null
+      ? [["Qwen decode", checkpoints.qwen_generation_ms]]
+      : []),
+    ...(checkpoints.qwen_time_to_first_token_ms != null
+      ? [["Qwen TTFT", checkpoints.qwen_time_to_first_token_ms]]
+      : []),
     ["Grounding", timings.grounding_validation],
     ["Total", data.total_latency_ms],
   ];
@@ -514,7 +696,7 @@ function setRecordingUi(active) {
   elements.upload.disabled = active;
   setModeDisabled(active);
   elements.recordVisual.classList.toggle("recording", active);
-  elements.recordLabel.textContent = active ? "Recording" : "Record";
+  elements.recordLabel.textContent = active ? "Recording" : "Record a question";
   if (!active) elements.recordHint.textContent = "Record up to 30 seconds";
 }
 
@@ -525,7 +707,11 @@ function setInputDisabled(disabled) {
   elements.textQuery.disabled = disabled;
   elements.textSubmitButton.disabled = disabled;
   elements.languageSelect.disabled = disabled;
+  if (elements.languageDropdownButton) elements.languageDropdownButton.disabled = disabled;
   setModeDisabled(disabled);
+  elements.textSubmitButton.innerHTML = disabled
+    ? "Generating…"
+    : 'Generate answer <span aria-hidden="true">↗</span>';
 }
 
 function setModeDisabled(disabled) {
@@ -534,22 +720,39 @@ function setModeDisabled(disabled) {
 }
 
 function resetForNewQuery() {
-  elements.resultPanel.hidden = true;
-  elements.progressPanel.hidden = true;
-  clearAlert();
-  resetStages();
-  elements.textQuery.value = "";
-  updateTextCount();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  preserveViewport(() => {
+    elements.resultPanel.hidden = true;
+    elements.progressPanel.hidden = true;
+    elements.resultPanel.setAttribute("aria-busy", "false");
+    elements.queryPanel.setAttribute("aria-busy", "false");
+    clearAlert();
+    resetStages();
+    elements.textQuery.value = "";
+    updateTextCount();
+  });
+  const focusTarget = lastQueryKind === "text" ? elements.textQuery : elements.recordButton;
+  focusTarget.focus({ preventScroll: true });
 }
 
 function resetStages() {
-  elements.stageList.querySelectorAll("li").forEach((item) => item.classList.remove("seen", "active"));
+  elements.stageList.querySelectorAll("li").forEach((item) => item.classList.remove("seen", "active", "skipped"));
 }
 
 function showAlert(message) {
   elements.alert.textContent = message;
   elements.alert.hidden = false;
+  elements.alert.focus({ preventScroll: true });
+}
+
+function preserveViewport(update) {
+  const left = window.scrollX;
+  const top = window.scrollY;
+  update();
+  const restore = () => window.scrollTo({ left, top, behavior: "auto" });
+  requestAnimationFrame(() => {
+    restore();
+    requestAnimationFrame(restore);
+  });
 }
 
 function clearAlert() {
