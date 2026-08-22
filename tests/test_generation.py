@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 
+from hh_goa_rag.generation.groq import GroqGeneration, GroqGenerationConfig
 from hh_goa_rag.generation.prompts import PROMPT_VARIANTS, build_messages
 from hh_goa_rag.generation.sarvam import (
     GenerationContext,
@@ -91,3 +92,71 @@ def test_config_freezes_ablation_parameters() -> None:
         SarvamGenerationConfig(temperature=0.2)
     with pytest.raises(ValueError, match="Unsupported"):
         SarvamGenerationConfig(model="invented")  # type: ignore[arg-type]
+
+
+def groq_stream_client_factory(payload: dict[str, object]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer secret"
+        body = json.loads(request.content)
+        assert body["model"] == "openai/gpt-oss-20b"
+        assert body["include_reasoning"] is False
+        assert body["reasoning_effort"] == "low"
+        assert body["response_format"] == {"type": "json_object"}
+        content = json.dumps(payload, ensure_ascii=False)
+        chunks = [
+            {"choices": [{"delta": {"content": content}, "finish_reason": None}]},
+            {
+                "choices": [{"delta": {}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 10,
+                    "total_tokens": 30,
+                    "completion_time": 0.05,
+                    "total_time": 0.06,
+                },
+            },
+        ]
+        sse = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        sse += "data: [DONE]\n\n"
+        return httpx.Response(200, text=sse)
+
+    transport = httpx.MockTransport(handler)
+    return lambda **_: httpx.Client(transport=transport)
+
+
+def test_groq_generation_returns_provider_metrics() -> None:
+    service = GroqGeneration(
+        "secret",
+        config=GroqGenerationConfig(),
+        client_factory=groq_stream_client_factory(
+            {"status": "ANSWER", "answer": "गोवा भारत में है।", "evidence_ids": ["p-1"]}
+        ),
+    )
+    result = service.generate("गोवा कहाँ है?", [context()])
+    assert result.status == "ok"
+    assert result.provider == "groq"
+    assert result.output_tokens == 10
+    assert result.tokens_per_second == 200
+    assert result.provider_latency_ms == 60
+    assert result.time_to_first_token_ms is not None
+
+
+def test_groq_warm_up_reuses_client_and_checks_model() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        assert request.headers["authorization"] == "Bearer secret"
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "openai/gpt-oss-20b"}]},
+        )
+
+    transport = httpx.MockTransport(handler)
+    service = GroqGeneration(
+        "secret",
+        client_factory=lambda **_: httpx.Client(transport=transport),
+    )
+    service.warm_up()
+    service.close()
+    assert calls == ["/openai/v1/models"]

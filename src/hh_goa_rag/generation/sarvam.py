@@ -78,7 +78,7 @@ class SarvamGenerationConfig:
 
 @dataclass(frozen=True)
 class GenerationResult:
-    provider: Literal["sarvam"]
+    provider: Literal["sarvam", "groq"]
     model: str
     status: Literal["ok", "error"]
     answer_status: Literal["ANSWER", "INSUFFICIENT_CONTEXT"] | None
@@ -96,6 +96,8 @@ class GenerationResult:
     error_message: str | None = None
     http_status: int | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    tokens_per_second: float | None = None
+    provider_latency_ms: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

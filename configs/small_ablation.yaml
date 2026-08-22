@@ -1,0 +1,45 @@
+experiment:
+  name: hh-goa-small-embedding-index-ablation
+  seed: 20260818
+
+dataset:
+  output_dir: data/processed
+  dev_queries: 1000
+  test_queries: 1000
+
+cache:
+  models: cache/models
+  embeddings: cache/embeddings
+  indexes: cache/indexes
+
+retrieval:
+  normalize_embeddings: true
+  normalization_method: float32_l2_v1
+  top_k: 10
+  search_oversample: 20
+  warmup_queries: 20
+
+small_ablation:
+  split: dev
+  batch_size: 32
+  max_sequence_length: 512
+  device: cpu
+  dtype: float32
+  chunking:
+    strategy: fixed_words
+    size: 128
+    overlap: 0
+  models:
+    - intfloat/multilingual-e5-small
+    - l3cube-pune/indic-sentence-bert-nli
+    - l3cube-pune/indic-sentence-similarity-sbert
+    - sentence-transformers/paraphrase-MiniLM-L3-v2
+  index_backends:
+    - name: faiss_flat_ip2
+      engine: faiss
+      index_type: flat_l2
+  selection_metrics:
+    - mrr_at_10
+    - recall_at_10
+    - recall_at_5
+    - recall_at_1

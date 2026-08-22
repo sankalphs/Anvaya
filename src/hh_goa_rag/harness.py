@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from hh_goa_rag.generation import (
+    GROQ_MODEL,
     GenerationContext,
-    SarvamGeneration,
-    SarvamGenerationConfig,
+    GroqGeneration,
+    GroqGenerationConfig,
 )
 from hh_goa_rag.guardrails import (
     GuardrailResponse,
@@ -27,10 +28,12 @@ from hh_goa_rag.models import MODEL_SPECS, EmbeddingModel
 from hh_goa_rag.retriever import ParentFaissRetriever
 from hh_goa_rag.stt.sarvam import SarvamSTT
 
-FROZEN_GENERATION_MODEL = "sarvam-105b"
+FROZEN_GENERATION_MODEL = GROQ_MODEL
 FROZEN_TOP_K = 10
 FROZEN_PROMPT = "strict_context_only"
-FROZEN_MAX_OUTPUT_TOKENS = 192
+FROZEN_MAX_OUTPUT_TOKENS = 128
+WARMUP_QUERY = "यूनाइटेड किंगडम में कौन से चार देश शामिल हैं"
+WARMUP_PASSAGE = "यूनाइटेड किंगडम में इंग्लैंड, स्कॉटलैंड, वेल्स और उत्तरी आयरलैंड शामिल हैं"
 FROZEN_RETRIEVAL = {
     "model": "BAAI/bge-m3",
     "chunking_strategy": "sentence",
@@ -40,6 +43,8 @@ FROZEN_RETRIEVAL = {
     "m": 32,
     "ef_construction": 200,
     "ef_search": 128,
+    "search_oversample": 20,
+    "normalization_method": "float32_l2_v1",
     "top_k": FROZEN_TOP_K,
 }
 
@@ -103,18 +108,29 @@ class VoiceRAGHarness:
             top_k=FROZEN_TOP_K,
             oversample=int(config["search_oversample"]),
         )
-        generator = SarvamGeneration.from_env(
+        generator = GroqGeneration.from_env(
             env_path,
-            config=SarvamGenerationConfig(
+            config=GroqGenerationConfig(
                 model=FROZEN_GENERATION_MODEL,
                 max_tokens=FROZEN_MAX_OUTPUT_TOKENS,
             ),
         )
         stt = SarvamSTT.from_env(env_path) if include_stt else None
+        generator.warm_up()
+        embedder.warm_up(WARMUP_QUERY, WARMUP_PASSAGE, rounds=1)
         return cls(embedder=embedder, retriever=retriever, generator=generator, stt=stt)
 
-    def handle_text(self, transcript: object) -> GuardrailResponse:
-        return self._handle_transcript(transcript, operation_started=time.perf_counter_ns())
+    def handle_text(
+        self,
+        transcript: object,
+        *,
+        on_stage: Callable[[str], None] | None = None,
+    ) -> GuardrailResponse:
+        return self._handle_transcript(
+            transcript,
+            operation_started=time.perf_counter_ns(),
+            on_stage=on_stage,
+        )
 
     def handle_audio(
         self,
@@ -173,6 +189,9 @@ class VoiceRAGHarness:
 
     def close(self) -> None:
         close = getattr(self.embedder, "close", None)
+        if callable(close):
+            close()
+        close = getattr(self.generator, "close", None)
         if callable(close):
             close()
 
@@ -240,7 +259,7 @@ class VoiceRAGHarness:
             vectors, _ = self.embedder.encode_queries([validation.normalized_transcript])
             stages["embedding"] = _elapsed_ms(started)
             started = time.perf_counter_ns()
-            contexts = self.retriever.retrieve(vectors[0])
+            contexts = list(self.retriever.retrieve(vectors[0]))[:FROZEN_TOP_K]
             stages["retrieval"] = _elapsed_ms(started)
             retrieved_ids = tuple(str(_field(item, "parent_id", "")) for item in contexts)
             metadata["retrieved"] = [
@@ -303,9 +322,19 @@ class VoiceRAGHarness:
             grounding = validate_generation(generated, generation_contexts)
             stages["grounding_validation"] = _elapsed_ms(started)
             metadata["generation"] = {
+                "provider": _field(generated, "provider", "groq"),
+                "model": _field(generated, "model", FROZEN_GENERATION_MODEL),
                 "provider_status": _field(generated, "status", "error"),
                 "answer_status": _field(generated, "answer_status", None),
                 "error_code": _field(generated, "error_code", None),
+                "error_message": _field(generated, "error_message", None),
+                "http_status": _field(generated, "http_status", None),
+                "latency_ms": _field(generated, "latency_ms", None),
+                "time_to_first_token_ms": _field(generated, "time_to_first_token_ms", None),
+                "prompt_tokens": _field(generated, "prompt_tokens", None),
+                "output_tokens": _field(generated, "output_tokens", None),
+                "tokens_per_second": _field(generated, "tokens_per_second", None),
+                "provider_latency_ms": _field(generated, "provider_latency_ms", None),
             }
             metadata["grounding"] = {
                 "valid": grounding.valid,
@@ -352,6 +381,8 @@ def _assert_frozen_config(config: dict[str, Any]) -> None:
         "m": config.get("index", {}).get("m"),
         "ef_construction": config.get("index", {}).get("ef_construction"),
         "ef_search": config.get("index", {}).get("ef_search"),
+        "search_oversample": config.get("search_oversample"),
+        "normalization_method": config.get("normalization_method"),
         "top_k": config.get("top_k"),
     }
     if observed != FROZEN_RETRIEVAL:

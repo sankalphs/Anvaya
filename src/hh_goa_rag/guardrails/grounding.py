@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from .types import ReasonCode, Route
+
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+_GROUNDING_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is",
+    "it", "of", "on", "or", "that", "the", "this", "to", "was", "were", "with",
+    "और", "का", "की", "के", "को", "में", "से", "है", "हैं", "यह", "एक",
+}
 
 
 @dataclass(frozen=True)
@@ -80,9 +89,41 @@ def validate_generation(result: Any, contexts: Sequence[Any]) -> GroundingDecisi
         return GroundingDecision(
             False, Route.SYSTEM_ERROR, ReasonCode.GENERATION_MISSING_CITATION, "", ()
         )
+    cited_text = " ".join(
+        str(_field(context, "text", ""))
+        for context in contexts
+        if str(_field(context, "parent_id", "")) in set(evidence_ids)
+    )
+    if not _answer_overlaps_evidence(answer, cited_text):
+        return GroundingDecision(
+            False, Route.SYSTEM_ERROR, ReasonCode.GENERATION_UNGROUNDED_ANSWER, "", ()
+        )
     return GroundingDecision(
         True, Route.ANSWER, ReasonCode.ANSWER_GROUNDED, answer, evidence_ids
     )
+
+
+def _answer_overlaps_evidence(answer: str, evidence: str, *, minimum: float = 0.2) -> bool:
+    """Require informative answer tokens to occur in the cited evidence.
+
+    This is intentionally a conservative lexical gate. It is not a substitute for
+    human/entailment evaluation, but it prevents a valid citation ID from acting as
+    a blanket approval for an unrelated answer.
+    """
+    def tokens(value: str) -> set[str]:
+        normalized = unicodedata.normalize("NFKC", value).casefold()
+        return {
+            token
+            for token in _TOKEN_RE.findall(normalized)
+            if token not in _GROUNDING_STOPWORDS
+        }
+
+    answer_tokens = tokens(answer)
+    evidence_tokens = tokens(evidence)
+    if not answer_tokens or not evidence_tokens:
+        return False
+    overlap = len(answer_tokens & evidence_tokens) / len(answer_tokens)
+    return overlap >= minimum
 
 
 def _parse_raw(raw_output: str) -> dict[str, Any] | None:

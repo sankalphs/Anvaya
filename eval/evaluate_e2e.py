@@ -124,11 +124,15 @@ def _development_cases(path: Path) -> dict[str, dict[str, Any]]:
     manifest = next((row for row in rows if row.get("record_type") == "manifest"), {})
     if manifest.get("sealed_test_included") is not False:
         raise RuntimeError("E2E development integration must not load the sealed test")
-    return {
-        row["case_id"]: row
-        for row in rows
-        if row.get("record_type") == "case" and row.get("split") == "development"
-    }
+    cases: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.get("record_type") != "case" or row.get("split") != "development":
+            continue
+        case_id = str(row.get("case_id", ""))
+        if not case_id or case_id in cases:
+            raise RuntimeError(f"Duplicate or missing development case_id: {case_id!r}")
+        cases[case_id] = row
+    return cases
 
 
 def _validate_manifest(
@@ -139,6 +143,10 @@ def _validate_manifest(
     manifest_case_ids = [row["case_id"] for row in manifest]
     if len(set(manifest_case_ids)) != 24 or set(manifest_case_ids) != set(cases):
         raise RuntimeError("Recording manifest does not match the 24 development routing cases")
+    for row in manifest:
+        case = cases[row["case_id"]]
+        if str(row.get("reference_text", "")).strip() != str(case.get("stt_reference", "")).strip():
+            raise RuntimeError(f"Recording manifest reference_text mismatch: {row['case_id']}")
 
 
 def _recording_available(row: dict[str, Any]) -> bool:

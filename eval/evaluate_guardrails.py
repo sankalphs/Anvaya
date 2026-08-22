@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from hh_goa_rag.config import stable_fingerprint
 from hh_goa_rag.generation.evaluation import percentile_summary, write_csv
 from hh_goa_rag.guardrails import (
     ReasonCode,
@@ -89,15 +90,7 @@ def _development_cases(path: Path) -> list[dict[str, Any]]:
 def _load_or_build_retrieval(
     cases: list[dict[str, Any]], cache_path: Path, *, device: str
 ) -> dict[str, dict[str, Any]]:
-    if cache_path.exists():
-        rows = list(read_jsonl(cache_path))
-        if {row["case_id"] for row in rows} == {case["case_id"] for case in cases}:
-            return {row["case_id"]: row for row in rows}
-
     import torch
-
-    from hh_goa_rag.models import MODEL_SPECS, EmbeddingModel
-    from hh_goa_rag.retriever import ParentFaissRetriever
 
     final_config = json.loads(
         Path("results/final_retriever_config.json").read_text(encoding="utf-8")
@@ -107,6 +100,27 @@ def _load_or_build_retrieval(
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = "bfloat16" if device.startswith("cuda") else "float32"
+    cache_fingerprint = stable_fingerprint(
+        {
+            "cases": sorted(str(case["case_id"]) for case in cases),
+            "final_config": final_config,
+            "index_artifact": index["metrics"]["index_artifact"],
+            "chunk_artifact": chunk["metrics"]["chunk_artifact"],
+            "device": device,
+            "dtype": dtype,
+        }
+    )
+    if cache_path.exists():
+        rows = list(read_jsonl(cache_path))
+        if (
+            {row.get("case_id") for row in rows} == {case["case_id"] for case in cases}
+            and all(row.get("cache_fingerprint") == cache_fingerprint for row in rows)
+        ):
+            return {row["case_id"]: row for row in rows}
+
+    from hh_goa_rag.models import MODEL_SPECS, EmbeddingModel
+    from hh_goa_rag.retriever import ParentFaissRetriever
+
     model = EmbeddingModel(
         MODEL_SPECS["BAAI/bge-m3"],
         Path(final_config["model_cache_path"]),
@@ -132,6 +146,7 @@ def _load_or_build_retrieval(
             rows.append(
                 {
                     "case_id": case["case_id"],
+                    "cache_fingerprint": cache_fingerprint,
                     "question": case["stt_reference"],
                     "embedding_latency_ms": embedding_ms,
                     "retrieval_latency_ms": retrieval_ms,

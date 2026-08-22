@@ -40,7 +40,9 @@ def build_flat_ip(
     return index, {
         "indexing_time_ms": indexing_ms,
         "index_size_bytes": index_path.stat().st_size,
-        "index_ram_bytes": int(vectors.nbytes),
+        "index_serialized_bytes": index_path.stat().st_size,
+        "index_ram_bytes": max(0, rss_after - rss_before),
+        "index_vector_bytes": int(vectors.nbytes),
         "process_rss_delta_bytes": max(0, rss_after - rss_before),
     }
 

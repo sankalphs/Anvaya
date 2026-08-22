@@ -15,6 +15,7 @@ from hh_goa_rag.dataset import prepare_dataset, read_manifest
 from hh_goa_rag.embedding_ablation import run_embedding_ablation
 from hh_goa_rag.finalization import run_finalization
 from hh_goa_rag.index_ablation import run_index_ablation
+from hh_goa_rag.small_ablation import run_small_ablation
 
 
 def _dataset_prepare(args: argparse.Namespace) -> int:
@@ -64,6 +65,15 @@ def _index_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _small_ablation_run(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    summary = run_small_ablation(config, data_dir=args.data_dir, index_only=args.index_only)
+    embedding = summary.get("embedding_winner", summary.get("embedding_model", "n/a"))
+    print(f"\nSmall embedding: **{embedding}**")
+    print(f"Index winner: **{summary['index_winner']}**")
+    return 0
+
+
 def _finalize_run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     result = run_finalization(config, data_dir=args.data_dir)
@@ -100,6 +110,18 @@ def build_parser() -> argparse.ArgumentParser:
     index_run = index_subparsers.add_parser("run", help="Run/resume all index backends")
     index_run.add_argument("--data-dir", type=Path)
     index_run.set_defaults(handler=_index_run)
+    small_parser = subparsers.add_parser(
+        "small-ablation", help="Small embedding-model and index ablation"
+    )
+    small_subparsers = small_parser.add_subparsers(dest="small_command", required=True)
+    small_run = small_subparsers.add_parser("run", help="Run/resume the small-model study")
+    small_run.add_argument("--data-dir", type=Path)
+    small_run.add_argument(
+        "--index-only",
+        action="store_true",
+        help="Reuse embedding vectors and run only the index comparison",
+    )
+    small_run.set_defaults(handler=_small_ablation_run)
     finalize_parser = subparsers.add_parser("finalize", help="Sealed test and final handoff")
     finalize_subparsers = finalize_parser.add_subparsers(
         dest="finalize_command", required=True

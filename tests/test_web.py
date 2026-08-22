@@ -52,6 +52,27 @@ class FakeWebHarness:
             },
         )
 
+    def handle_text(self, text: str, *, on_stage: Any) -> GuardrailResponse:
+        assert text == "typed question"
+        for stage in (
+            "Checking query",
+            "Retrieving evidence",
+            "Generating answer",
+            "Validating grounding",
+        ):
+            on_stage(stage)
+        return GuardrailResponse(
+            route=Route.ANSWER,
+            answer="text grounded answer",
+            retrieved_ids=("p-1",),
+            citations=("p-1",),
+            reason_code=ReasonCode.ANSWER_GROUNDED,
+            transcript=text,
+            stage_latencies_ms={"generation": 2.0},
+            total_latency_ms=2.0,
+            metadata={"retrieved": []},
+        )
+
     def close(self) -> None:
         self.closed = True
 
@@ -110,6 +131,42 @@ def test_audio_endpoint_rejects_non_frozen_audio_format() -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Audio must be 16 kHz, mono, PCM16 WAV"
+
+
+def test_text_endpoint_calls_harness_and_returns_structured_output() -> None:
+    harness = FakeWebHarness()
+    with TestClient(_test_app(harness)) as client:
+        response = client.post(
+            "/api/query/text",
+            headers={"X-Request-ID": "request-text-1"},
+            json={"text": "typed question"},
+        )
+        progress = client.get("/api/query/status/request-text-1")
+
+    assert response.status_code == 200
+    assert response.json()["route"] == "ANSWER"
+    assert response.json()["transcript"] == "typed question"
+    assert progress.status_code == 200
+    assert progress.json()["complete"] is True
+    assert progress.json()["history"] == [
+        "Checking query",
+        "Retrieving evidence",
+        "Generating answer",
+        "Validating grounding",
+        "Complete",
+    ]
+
+
+def test_text_endpoint_validates_payload() -> None:
+    harness = FakeWebHarness()
+    with TestClient(_test_app(harness)) as client:
+        missing_text = client.post("/api/query/text", json={})
+        too_long = client.post("/api/query/text", json={"text": "x" * 2_001})
+
+    assert missing_text.status_code == 422
+    assert missing_text.json()["detail"] == "Text query must be a string"
+    assert too_long.status_code == 422
+    assert "2,000" in too_long.json()["detail"]
 
 
 def test_health_and_frontend_are_served() -> None:

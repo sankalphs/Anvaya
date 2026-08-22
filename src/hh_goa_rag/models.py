@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import re
 import shutil
@@ -37,6 +38,21 @@ class ModelSpec:
 
 MODEL_SPECS: dict[str, ModelSpec] = {
     "BAAI/bge-m3": ModelSpec("BAAI/bge-m3"),
+    "intfloat/multilingual-e5-small": ModelSpec(
+        "intfloat/multilingual-e5-small", query_prefix="query: ", passage_prefix="passage: "
+    ),
+    "l3cube-pune/indic-sentence-bert-nli": ModelSpec(
+        "l3cube-pune/indic-sentence-bert-nli"
+    ),
+    "l3cube-pune/indic-sentence-similarity-sbert": ModelSpec(
+        "l3cube-pune/indic-sentence-similarity-sbert"
+    ),
+    "sentence-transformers/paraphrase-MiniLM-L3-v2": ModelSpec(
+        "sentence-transformers/paraphrase-MiniLM-L3-v2"
+    ),
+    "sentence-transformers/paraphrase-multilingual-mpnet-base-v2": ModelSpec(
+        "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+    ),
     "intfloat/multilingual-e5-base": ModelSpec(
         "intfloat/multilingual-e5-base", query_prefix="query: ", passage_prefix="passage: "
     ),
@@ -118,12 +134,18 @@ def acquire_model(repository: str, model_root: str | Path) -> tuple[Path, str]:
             "revision": JINA_CODE_REVISION,
             "compatibility_patch": "Call post_init on XLMRobertaLoRA for Transformers >=5",
         }
+    python_hashes = {
+        str(path.relative_to(target)).replace("\\", "/"): _sha256_file(path)
+        for path in target.rglob("*.py")
+        if path.is_file()
+    }
     write_json(
         target / ".hh_goa_model.json",
         {
             "repository": repository,
             "revision": revision,
             "additional_code": additional_code,
+            "python_file_sha256": python_hashes,
             "owned_by": "hh-goa-retrieval-ablation",
         },
     )
@@ -142,6 +164,7 @@ class EmbeddingModel:
         max_sequence_length: int,
         dtype: str,
     ) -> None:
+        _verify_model_artifact(path, spec.repository)
         self.spec = spec
         self.device = device
         self.max_sequence_length = max_sequence_length
@@ -301,3 +324,31 @@ class EmbeddingModel:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _verify_model_artifact(path: Path, repository: str) -> None:
+    """Verify the pinned acquisition manifest before executing local model code."""
+    manifest_path = path / ".hh_goa_model.json"
+    if not manifest_path.is_file():
+        raise RuntimeError(f"Model artifact manifest is missing: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("repository") != repository or not manifest.get("revision"):
+        raise RuntimeError("Model artifact repository/revision metadata is invalid")
+    python_files = {
+        str(candidate.relative_to(path)).replace("\\", "/"): _sha256_file(candidate)
+        for candidate in path.rglob("*.py")
+        if candidate.is_file()
+    }
+    expected = manifest.get("python_file_sha256")
+    if python_files and not isinstance(expected, dict):
+        raise RuntimeError("Model Python-code hashes are missing; refusing remote-code execution")
+    if python_files != (expected or {}):
+        raise RuntimeError("Model Python-code hash verification failed")

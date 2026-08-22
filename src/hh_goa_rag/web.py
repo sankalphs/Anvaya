@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import hmac
 import json
+import logging
 import os
 import re
 import tempfile
@@ -23,9 +26,14 @@ from fastapi.staticfiles import StaticFiles
 
 from hh_goa_rag.harness import VoiceRAGHarness
 
+LOGGER = logging.getLogger(__name__)
+
 APP_TITLE = "Anvaya Voice-RAG"
 MAX_AUDIO_BYTES = 2 * 1024 * 1024
 MAX_AUDIO_SECONDS = 30.0
+MAX_TEXT_CHARS = 2_000
+MAX_CONCURRENT_REQUESTS = 1
+MAX_REQUEST_BODY_BYTES = MAX_AUDIO_BYTES + 64 * 1024
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 STATIC_DIR = Path(__file__).with_name("static")
 
@@ -35,15 +43,20 @@ class AppSettings:
     retriever_config: Path
     env_file: Path
     device: str
+    api_token: str | None = None
 
     @classmethod
     def from_env(cls) -> AppSettings:
+        load_dotenv(Path(".env"), override=False)
+        selected_env_file = Path(os.getenv("HH_RAG_ENV_FILE", ".env"))
+        load_dotenv(selected_env_file, override=False)
         return cls(
             retriever_config=Path(
                 os.getenv("HH_RAG_RETRIEVER_CONFIG", "results/final_retriever_config.json")
             ),
-            env_file=Path(os.getenv("HH_RAG_ENV_FILE", ".env")),
+            env_file=selected_env_file,
             device=os.getenv("HH_RAG_DEVICE", "auto"),
+            api_token=os.getenv("HH_RAG_API_TOKEN") or None,
         )
 
 
@@ -55,11 +68,11 @@ class ProgressRegistry:
         self._lock = threading.Lock()
         self._max_entries = max_entries
 
-    def start(self, request_id: str) -> None:
+    def start(self, request_id: str, *, initial_stage: str = "Preparing audio") -> None:
         with self._lock:
             self._prune()
             self._entries[request_id] = {
-                "stage": "Preparing audio",
+                "stage": initial_stage,
                 "history": [],
                 "complete": False,
                 "error": False,
@@ -107,6 +120,8 @@ def validate_environment(settings: AppSettings) -> dict[str, Any]:
     errors: list[str] = []
     if not os.getenv("SARVAM_API_KEY", "").strip():
         errors.append("SARVAM_API_KEY is missing")
+    if not os.getenv("GROQ_API_KEY", "").strip():
+        errors.append("GROQ_API_KEY is missing")
     if not settings.retriever_config.is_file():
         errors.append(f"retriever config is missing: {settings.retriever_config}")
     else:
@@ -123,6 +138,7 @@ def validate_environment(settings: AppSettings) -> dict[str, Any]:
         raise RuntimeError("; ".join(errors))
     return {
         "sarvam_api_key": "configured",
+        "groq_api_key": "configured",
         "retriever_config": "available",
         "frozen_artifacts": "available",
     }
@@ -146,6 +162,8 @@ def create_app(
     configured_settings = settings or AppSettings.from_env()
     build_harness = harness_factory or _default_harness_factory
     progress = ProgressRegistry()
+    request_slots = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+    active_jobs: set[asyncio.Task[Any]] = set()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> Iterator[None]:
@@ -157,8 +175,11 @@ def create_app(
                 app.state.environment = validate_environment(configured_settings)
             app.state.harness = build_harness(configured_settings)
         except Exception as error:  # health must remain reachable on startup failure
-            app.state.startup_error = f"{type(error).__name__}: {error}"
+            LOGGER.exception("Voice-RAG startup failed")
+            app.state.startup_error = f"{type(error).__name__}"
         yield
+        if active_jobs:
+            await asyncio.gather(*active_jobs, return_exceptions=True)
         harness = app.state.harness
         if harness is not None:
             close = getattr(harness, "close", None)
@@ -177,6 +198,27 @@ def create_app(
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Callable[..., Any]) -> Response:
+        content_length = request.headers.get("content-length")
+        if request.url.path in {"/api/query/audio", "/api/query/text"} and content_length:
+            try:
+                max_body_bytes = (
+                    MAX_REQUEST_BODY_BYTES
+                    if request.url.path == "/api/query/audio"
+                    else MAX_TEXT_CHARS + 64 * 1024
+                )
+                if int(content_length) > max_body_bytes:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "detail": (
+                                "Audio upload is too large"
+                                if request.url.path == "/api/query/audio"
+                                else "Text query is too large"
+                            )
+                        },
+                    )
+            except ValueError:
+                return JSONResponse(status_code=400, content={"detail": "Invalid content length"})
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -196,7 +238,7 @@ def create_app(
                 content={
                     "status": "unavailable",
                     "pipeline": "frozen-voice-rag",
-                    "detail": request.app.state.startup_error or "pipeline is not loaded",
+                    "detail": "pipeline is not ready",
                 },
             )
         return JSONResponse(
@@ -224,6 +266,7 @@ def create_app(
     ) -> dict[str, Any]:
         request_id = _validated_request_id(x_request_id)
         response.headers["X-Request-ID"] = request_id
+        _require_api_token(request, configured_settings.api_token)
         progress.start(request_id)
         harness = request.app.state.harness
         if harness is None:
@@ -234,19 +277,29 @@ def create_app(
         try:
             temporary_path = await _save_upload(audio)
             _validate_pcm16_wav(temporary_path)
-            import asyncio
-
-            result = await asyncio.to_thread(
-                harness.handle_audio,
-                temporary_path,
-                on_stage=lambda stage_name: progress.update(request_id, stage_name),
-            )
+            async with request_slots:
+                job = asyncio.create_task(
+                    asyncio.to_thread(
+                        harness.handle_audio,
+                        temporary_path,
+                        on_stage=lambda stage_name: progress.update(request_id, stage_name),
+                    )
+                )
+                active_jobs.add(job)
+                try:
+                    result = await asyncio.shield(job)
+                except asyncio.CancelledError:
+                    await asyncio.shield(job)
+                    raise
+                finally:
+                    active_jobs.discard(job)
             progress.finish(request_id)
             return result.to_dict()
         except HTTPException:
             progress.finish(request_id, error=True)
             raise
         except Exception:
+            LOGGER.exception("Audio request failed", extra={"request_id": request_id})
             progress.finish(request_id, error=True)
             raise HTTPException(
                 status_code=500, detail="The request could not be processed"
@@ -255,6 +308,64 @@ def create_app(
             await audio.close()
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
+
+    @app.post("/api/query/text")
+    async def query_text(
+        request: Request,
+        response: Response,
+        x_request_id: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        request_id = _validated_request_id(x_request_id)
+        response.headers["X-Request-ID"] = request_id
+        _require_api_token(request, configured_settings.api_token)
+        progress.start(request_id, initial_stage="Preparing text")
+        harness = request.app.state.harness
+        if harness is None:
+            progress.finish(request_id, error=True)
+            raise HTTPException(status_code=503, detail="Voice-RAG pipeline is unavailable")
+
+        try:
+            try:
+                payload = await request.json()
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                raise HTTPException(
+                    status_code=400, detail="Request body must be valid JSON"
+                ) from None
+            if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
+                raise HTTPException(status_code=422, detail="Text query must be a string")
+            text = payload["text"]
+            if len(text) > MAX_TEXT_CHARS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Text query must be {MAX_TEXT_CHARS:,} characters or fewer",
+                )
+            async with request_slots:
+                job = asyncio.create_task(
+                    asyncio.to_thread(
+                        harness.handle_text,
+                        text,
+                        on_stage=lambda stage_name: progress.update(request_id, stage_name),
+                    )
+                )
+                active_jobs.add(job)
+                try:
+                    result = await asyncio.shield(job)
+                except asyncio.CancelledError:
+                    await asyncio.shield(job)
+                    raise
+                finally:
+                    active_jobs.discard(job)
+            progress.finish(request_id)
+            return result.to_dict()
+        except HTTPException:
+            progress.finish(request_id, error=True)
+            raise
+        except Exception:
+            LOGGER.exception("Text request failed", extra={"request_id": request_id})
+            progress.finish(request_id, error=True)
+            raise HTTPException(
+                status_code=500, detail="The request could not be processed"
+            ) from None
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
@@ -281,7 +392,7 @@ async def _save_upload(upload: UploadFile) -> Path:
             while chunk := await upload.read(64 * 1024):
                 total += len(chunk)
                 if total > MAX_AUDIO_BYTES:
-                    raise HTTPException(status_code=413, detail="Audio exceeds the 30-second limit")
+                    raise HTTPException(status_code=413, detail="Audio upload is too large")
                 handle.write(chunk)
         if total == 0:
             raise HTTPException(status_code=400, detail="The uploaded recording is empty")
@@ -311,11 +422,28 @@ def _validate_pcm16_wav(path: Path) -> None:
         raise HTTPException(status_code=413, detail="Audio exceeds the 30-second limit")
 
 
+def _require_api_token(request: Request, expected: str | None) -> None:
+    if expected is None:
+        return
+    supplied = request.headers.get("authorization", "")
+    if supplied.lower().startswith("bearer "):
+        supplied = supplied[7:].strip()
+    else:
+        supplied = request.headers.get("x-api-key", "")
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+
 app = create_app()
 
 
 def main() -> None:
-    uvicorn.run("hh_goa_rag.web:app", host="0.0.0.0", port=8000, workers=1)
+    uvicorn.run(
+        "hh_goa_rag.web:app",
+        host=os.getenv("HH_RAG_BIND_HOST", "127.0.0.1"),
+        port=int(os.getenv("HH_RAG_PORT", "8000")),
+        workers=1,
+    )
 
 
 if __name__ == "__main__":

@@ -24,15 +24,39 @@ _FILLERS = {
 _UNSAFE_RULES: tuple[tuple[ReasonCode, tuple[str, ...]], ...] = (
     (
         ReasonCode.UNSAFE_CREDENTIAL_THEFT,
-        ("password चुरा", "पासवर्ड चुरा", "steal password", "credential theft"),
+        (
+            "password चुरा",
+            "पासवर्ड चुरा",
+            "steal password",
+            "credential theft",
+            "steal the password",
+            "how do i steal the password",
+            "पासवर्ड चोरी",
+            "पासवर्ड कैसे चुर",
+        ),
     ),
     (
         ReasonCode.UNSAFE_WEAPONS,
-        ("untraceable weapon", "build a weapon", "हथियार बना", "बम बना"),
+        (
+            "untraceable weapon",
+            "build a weapon",
+            "make a bomb",
+            "how to make a bomb",
+            "हथियार बना",
+            "बम बना",
+            "बम कैसे बना",
+        ),
     ),
     (
         ReasonCode.UNSAFE_PHYSICAL_HARM,
-        ("नुकसान पहुँचाने", "जहर कैसे", "ज़हर कैसे", "poison someone", "kill someone"),
+        (
+            "नुकसान पहुँचाने",
+            "जहर कैसे",
+            "ज़हर कैसे",
+            "poison someone",
+            "how to poison someone",
+            "kill someone",
+        ),
     ),
     (
         ReasonCode.UNSAFE_HATE,
@@ -102,11 +126,23 @@ def _clean_token(token: str) -> str:
 
 
 def route_input(transcript: str) -> InputDecision:
-    folded = transcript.casefold()
+    folded = _policy_text(transcript)
     for reason, phrases in _UNSAFE_RULES:
-        if any(phrase in folded for phrase in phrases):
+        if any(_policy_text(phrase) in folded for phrase in phrases):
             return InputDecision(False, transcript, Route.UNSAFE, reason)
     for reason, phrases in _OFF_TOPIC_RULES:
-        if any(phrase in folded for phrase in phrases):
+        if any(_policy_text(phrase) in folded for phrase in phrases):
             return InputDecision(False, transcript, Route.OFF_TOPIC, reason)
     return InputDecision(True, transcript)
+
+
+def _policy_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(
+        "".join(
+            character
+            for character in token
+            if character.isalnum() or unicodedata.category(character).startswith("M")
+        )
+        for token in normalized.split()
+    )

@@ -68,6 +68,10 @@ def run_faiss(
     index_type = config["index_type"]
     if index_type == "flat_ip":
         index: faiss.Index = faiss.IndexFlatIP(corpus.shape[1])
+    elif index_type == "flat_l2":
+        # Exact flat L2 is the second flat baseline. With unit-normalized
+        # vectors, ranking is mathematically equivalent to inner product.
+        index = faiss.IndexFlatL2(corpus.shape[1])
     elif index_type == "hnsw":
         index = faiss.IndexHNSWFlat(
             corpus.shape[1], int(config["m"]), faiss.METRIC_INNER_PRODUCT
@@ -103,7 +107,9 @@ def run_faiss(
         {
             "indexing_time_ms": indexing_ms,
             "index_size_bytes": size,
-            "index_ram_bytes": size,
+            "index_serialized_bytes": size,
+            "index_ram_bytes": max(0, rss_after - rss_before),
+            "index_vector_bytes": int(corpus.nbytes),
             "process_rss_delta_bytes": max(0, rss_after - rss_before),
             "index_artifact": str(path),
         },
@@ -158,6 +164,9 @@ def run_qdrant_local(
             limit=search_k,
             with_payload=["parent_id"],
             with_vectors=False,
+            search_params=models.SearchParams(exact=True)
+            if config.get("search_mode") == "exact"
+            else None,
         )
         return [str(point.payload["parent_id"]) for point in response.points]
 
@@ -178,7 +187,9 @@ def run_qdrant_local(
         {
             "indexing_time_ms": indexing_ms,
             "index_size_bytes": size,
+            "index_serialized_bytes": size,
             "index_ram_bytes": max(0, rss_after - rss_before),
+            "index_vector_bytes": int(np.asarray(vectors, dtype=np.float32).nbytes),
             "process_rss_delta_bytes": max(0, rss_after - rss_before),
             "index_artifact": str(path),
         },
@@ -260,7 +271,9 @@ def run_chroma_local(
         {
             "indexing_time_ms": indexing_ms,
             "index_size_bytes": size,
+            "index_serialized_bytes": size,
             "index_ram_bytes": max(0, rss_after - rss_before),
+            "index_vector_bytes": int(np.asarray(vectors, dtype=np.float32).nbytes),
             "process_rss_delta_bytes": max(0, rss_after - rss_before),
             "index_artifact": str(path),
         },
