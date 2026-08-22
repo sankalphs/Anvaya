@@ -145,8 +145,6 @@ def validate_environment(settings: AppSettings) -> dict[str, Any]:
     errors: list[str] = []
     if not os.getenv("SARVAM_API_KEY", "").strip():
         errors.append("SARVAM_API_KEY is missing")
-    if not os.getenv("GROQ_API_KEY", "").strip():
-        errors.append("GROQ_API_KEY is missing")
     if not settings.retriever_config.is_file():
         errors.append(f"retriever config is missing: {settings.retriever_config}")
     else:
@@ -163,7 +161,7 @@ def validate_environment(settings: AppSettings) -> dict[str, Any]:
         raise RuntimeError("; ".join(errors))
     return {
         "sarvam_api_key": "configured",
-        "groq_api_key": "configured",
+        "generation": "local-qwen-gguf",
         "retriever_config": "available",
         "frozen_artifacts": "available",
     }
@@ -183,6 +181,8 @@ def create_app(
     *,
     harness_factory: Callable[[AppSettings], Any] | None = None,
     settings: AppSettings | None = None,
+    include_ui: bool = True,
+    defer_startup: bool = False,
 ) -> FastAPI:
     configured_settings = settings or AppSettings.from_env()
     build_harness = harness_factory or _default_harness_factory
@@ -195,13 +195,27 @@ def create_app(
         app.state.harness = None
         app.state.startup_error = None
         app.state.environment = {}
-        try:
-            if harness_factory is None:
-                app.state.environment = validate_environment(configured_settings)
-            app.state.harness = build_harness(configured_settings)
-        except Exception as error:  # health must remain reachable on startup failure
-            LOGGER.exception("Voice-RAG startup failed")
-            app.state.startup_error = f"{type(error).__name__}"
+        def initialize_pipeline() -> None:
+            try:
+                if harness_factory is None:
+                    app.state.environment = validate_environment(configured_settings)
+                app.state.harness = build_harness(configured_settings)
+            except Exception as error:  # health must remain reachable on startup failure
+                LOGGER.exception("Voice-RAG startup failed")
+                app.state.startup_error = f"{type(error).__name__}"
+
+        if defer_startup:
+            # Some hosted demos need to expose their UI while a large model is
+            # downloading. Requests remain explicitly unavailable until the
+            # pipeline is ready, while the health endpoint reports 503.
+            app.state.startup_thread = threading.Thread(
+                target=initialize_pipeline,
+                name="voice-rag-startup",
+                daemon=True,
+            )
+            app.state.startup_thread.start()
+        else:
+            initialize_pipeline()
         yield
         if active_jobs:
             await asyncio.gather(*active_jobs, return_exceptions=True)
@@ -246,14 +260,20 @@ def create_app(
                 return JSONResponse(status_code=400, content={"detail": "Invalid content length"})
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        # Hugging Face renders a Space app inside an iframe on the Space page.
+        # Keep the strict local default, but allow the hosted wrapper to opt in
+        # so the unchanged UI can be displayed from the HF app tab.
+        if os.getenv("HH_RAG_ALLOW_EMBED", "").strip().lower() not in {"1", "true", "yes"}:
+            response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "microphone=(self)"
         return response
 
-    @app.get("/", include_in_schema=False)
-    async def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    if include_ui:
+
+        @app.get("/", include_in_schema=False)
+        async def index() -> FileResponse:
+            return FileResponse(STATIC_DIR / "index.html")
 
     @app.get("/health")
     async def health(request: Request) -> JSONResponse:
@@ -402,10 +422,13 @@ def create_app(
 
 
 def _validated_request_id(value: str | None) -> str:
-    if value and REQUEST_ID_PATTERN.fullmatch(value):
-        return value
+    # Hosting proxies may append their own non-conforming x-request-id; be
+    # tolerant of foreign formats by sanitizing instead of rejecting, so plain
+    # HTTP clients without the header are never blocked.
     if value:
-        raise HTTPException(status_code=400, detail="Invalid X-Request-ID")
+        cleaned = re.sub(r"[^A-Za-z0-9_-]", "-", value.strip()).strip("-")[:80]
+        if len(cleaned) >= 8:
+            return cleaned
     import secrets
 
     return secrets.token_urlsafe(16)

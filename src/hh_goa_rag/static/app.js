@@ -386,23 +386,83 @@ function renderResult(data) {
     if (data.route === "SYSTEM_ERROR" || data.route === "STT_FAILURE") {
       elements.routeBadge.classList.add("error");
     }
-    elements.latency.textContent = `${formatMs(data.total_latency_ms)} measured request latency`;
+    const budget = (data.metadata && data.metadata.latency_budget) || null;
+    let latencyText = `${formatMs(data.total_latency_ms)} measured request latency`;
+    if (budget && budget.met === false) {
+      latencyText += ` · ⏱ exceeded the ${Math.round(budget.target_ms)} ms target by ${formatMs(budget.over_by_ms)}`;
+    }
+    elements.latency.textContent = latencyText;
     elements.queryKind.textContent = `${lastQueryKind === "text" ? "Text" : "Voice"} input · final route`;
     elements.transcript.textContent = data.transcript || "No transcript was produced.";
     elements.answerLabel.textContent = data.route === "ANSWER" ? "Answer" : "Response";
-    elements.answerVisibilityLabel.textContent = data.route === "ANSWER"
-      ? "Generated from cited evidence"
-      : "No answer generated · retrieval evidence shown";
+    const genInfo = (data.metadata && data.metadata.generation) || {};
+    if (data.route === "ANSWER" && budget && budget.met === false) {
+      // Coverage-first honesty: say plainly why this answer cost more time.
+      const providerNames = {
+        sarvam: "the Sarvam-105B generator",
+        groq: "the Groq gpt-oss-20b generator",
+        "qwen-gguf": "the resident local GGUF model",
+      };
+      const who =
+        providerNames[genInfo.provider] ||
+        (genInfo.provider ? String(genInfo.provider) : "a fallback generator");
+      const genLatency = Math.round(genInfo.latency_ms || 0);
+      elements.answerVisibilityLabel.textContent =
+        `Over-budget grounded answer · the instant extractive pass found no confident verbatim span, so ${who} generated this (~${genLatency} ms). Slower, still fully cited.`;
+    } else {
+      elements.answerVisibilityLabel.textContent = data.route === "ANSWER"
+        ? "Generated from cited evidence"
+        : data.reason_code === "DEADLINE_BUDGET_EXHAUSTED"
+          ? "Latency-budget refusal · retrieved evidence shown"
+          : "No answer generated · retrieval evidence shown";
+    }
     elements.answer.textContent = responseText(data);
     elements.reasonCode.textContent = `Reason code · ${data.reason_code || "NONE"}`;
     renderEvidence(data);
     renderTechnicalDetails(data);
-    elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   }, 120);
 }
 
 function responseText(data) {
   if (data.route === "ANSWER") return data.answer || "A grounded answer was not returned.";
+  // Every post-retrieval refusal pairs an honest explanation with the single
+  // closest retrieved passage, so users always leave with something useful.
+  const explanation = baseReasonLine(data);
+  const skipClosest = ["OFF_TOPIC", "UNSAFE", "STT_FAILURE"].includes(data.route);
+  const retrievedList = (data.metadata && data.metadata.retrieved) || [];
+  if (!skipClosest && retrievedList.length > 0) {
+    const top = retrievedList[0];
+    const score = typeof top.score === "number" ? ` · match strength ${top.score.toFixed(2)}` : "";
+    const passage = String(top.text || "").trim();
+    const trimmed = passage.length > 420 ? `${passage.slice(0, 420)}…` : passage;
+    return `${explanation}\n\nClosest passage in the knowledge base${score}:\n"${trimmed}"`;
+  }
+  return explanation;
+}
+
+function baseReasonLine(data) {
+  const reason = data.reason_code || "";
+  const timings = data.stage_latencies_ms || {};
+  const spentMs = Math.round(data.total_latency_ms || 0);
+  if (reason === "DEADLINE_BUDGET_EXHAUSTED") {
+    const embedMs = Math.round(timings.query_embedding ?? timings.embedding ?? 0);
+    const searchMs = Math.round(timings.vector_search ?? timings.retrieval ?? 0);
+    const spentPart =
+      embedMs || searchMs
+        ? `locating them took ${embedMs} ms embedding + ${searchMs} ms search (${spentMs} ms of the strict 200 ms budget in total)`
+        : `${spentMs} ms were spent inside the request`;
+    return `Relevant passages were found - ${spentPart} - but no confident verbatim answer could be extracted from them, so I show the closest passages rather than guess.`;
+  }
+  if (reason === "RETRIEVAL_LOW_CONFIDENCE") {
+    const decision = (data.metadata && data.metadata.evidence_decision) || {};
+    const topScore = typeof decision.top_score === "number" ? decision.top_score.toFixed(2) : null;
+    return topScore
+      ? `The strongest match scores only ${topScore} similarity against this question (a confident answer needs roughly 0.67+), so I decline rather than guess. Nothing closer exists in the corpus.`
+      : "Nothing in the knowledge base matches this question strongly enough to answer reliably, so I decline rather than guess.";
+  }
+  if (reason === "MODEL_INSUFFICIENT_CONTEXT") {
+    return "Passages were retrieved, but none contains an extractable answer span for this question.";
+  }
   const friendly = {
     INSUFFICIENT_CONTEXT:
       "I could not find enough evidence in the provided knowledge base to answer reliably.",
