@@ -17,7 +17,11 @@ from hh_goa_rag.config import stable_fingerprint
 from hh_goa_rag.embedding_ablation import resolve_data_dir
 from hh_goa_rag.index_backends import run_faiss
 from hh_goa_rag.io import read_jsonl, write_json, write_jsonl
-from hh_goa_rag.metrics import evaluate_rankings, qrels_by_query
+from hh_goa_rag.metrics import (
+    evaluate_rankings,
+    evaluate_rankings_by_language,
+    qrels_by_query,
+)
 from hh_goa_rag.models import MODEL_SPECS, EmbeddingModel, acquire_model
 from hh_goa_rag.reporting import markdown_table
 
@@ -123,7 +127,14 @@ def _recommendation(
     manifest: dict[str, Any],
     cleanup: dict[str, Any],
 ) -> str:
-    dataset_revision = manifest["artifact_identity"]["resolution"]["revision"]
+    dataset_revision = manifest["artifact_identity"]["revision"]
+    languages = ", ".join(manifest["artifact_identity"]["languages"])
+    embedding_model = embedding_winner["winner"]
+    chunking_strategy = chunking_winner["winner"]
+    backend_name = index_winner["winner"]
+    embedding_dimension = embedding_winner["metrics"].get(
+        "embedding_dimension", "recorded per candidate"
+    )
     embedding_table = _table(
         "results/embedding_ablation.csv",
         "model",
@@ -169,47 +180,48 @@ def _recommendation(
 
 **Best embedding model → Best chunking strategy → Best index/storage system**
 
-**`BAAI/bge-m3` → sentence-based packing (`max_words=128`) → FAISS HNSW
-(`M=32`, `efConstruction=200`, `efSearch=128`, float32 normalized inner product)**
+**`{embedding_model}` → `{chunking_strategy}` → `{backend_name}`**
 
 Selection used only the development split. The upstream validation-derived test split remained
 sealed until all three winners and their configurations were fixed.
 
 ## Exact reproducibility configuration
 
-- Dataset: `ai4bharat/MSMARCO-XI`, auto-resolved language `hi`, Hub revision `{dataset_revision}`
+- Dataset: `ai4bharat/MSMARCO-XI`, balanced languages `{languages}`, Hub revision
+  `{dataset_revision}`
 - Processed dataset artifact: `{final_result['dataset_artifact']}`
 - Random seed: `{final_result['seed']}`
-- Embedding checkpoint: `BAAI/bge-m3` revision `{embedding_winner['model_revision']}`
-- Embedding dimension/dtype: 1024 / inference `bfloat16`, persisted `float32`
+- Embedding checkpoint: `{embedding_model}` revision `{embedding_winner['model_revision']}`
+- Embedding dimension: `{embedding_dimension}`
 - Normalization: final float32 L2 (`float32_l2_v1`); similarity is cosine-equivalent inner product
 - Chunking: punctuation-aware sentence packing, maximum 128 whitespace-delimited words,
   parent-level qrels
-- Index: FAISS `IndexHNSWFlat`, `M=32`, `efConstruction=200`, `efSearch=128`, `METRIC_INNER_PRODUCT`
+- Index configuration: `{json.dumps(index_winner['backend_config'], sort_keys=True)}`
 - Retrieval: top 10 unique parents, search oversampling 20×, 20 warm-up queries
-- Evaluation: 1,000 fixed dev queries per ablation; 1,000 sealed test queries exactly once
+- Evaluation: `{manifest['splits']['dev']['queries']}` balanced development queries and
+  `{manifest['splits']['test']['queries']}` sealed test queries exactly once
 
 ## Embedding ablation (development)
 
 {embedding_table}
 
-BGE-M3 won the predeclared lexicographic quality priority: nDCG@10, then MRR@10, then Recall@10;
-latency was used only after quality ties.
+The winner used the predeclared lexicographic quality priority
+`{embedding_winner['selection_metrics_in_priority_order']}`; latency was used only after quality
+ties. Each row also records per-language metrics.
 
 ## Chunking ablation (development)
 
 {chunking_table}
 
-Sentence packing provided the highest nDCG@10 and Recall@10 while keeping corpus growth close to
-fixed-size chunking.
+Chunking was selected on the same multilingual development artifact with the embedding model
+held fixed; the table reports its quality/latency trade-off.
 
 ## Index/storage ablation (development)
 
 {index_table}
 
-FAISS HNSW matched the best quality metrics and won the latency tie-breaker. IVF-Flat was faster but
-reduced Recall@10. Qdrant embedded/local was exact but is a brute-force implementation; Chroma local
-matched exact quality but had higher retrieval latency and resource use than FAISS HNSW.
+Index candidates were evaluated with the same normalized vectors and query set; the table reports
+FAISS algorithm quality, build cost, serialized size, and p50/p95/p100 retrieval latency.
 
 ## Sealed test result
 
@@ -228,8 +240,9 @@ adding generation, speech, or frontend code here.
 
 ## Project-local model cleanup
 
-The winning BGE-M3 directory was preserved. Only direct children of `{cleanup['root']}` carrying the
-exact `.hh_goa_model.json` ownership marker for this experiment were eligible for deletion. Removed:
+The winning `{embedding_model}` directory was preserved. Only direct children of `{cleanup['root']}`
+carrying the exact `.hh_goa_model.json` ownership marker for this experiment were eligible for
+deletion. Removed:
 
 {removed}
 
@@ -238,10 +251,10 @@ this repository, processed dataset, embeddings, index, or winning model was dele
 
 ## Scope and caveats
 
-MSMARCO-XI has no Konkani configuration, so the repository default Hindi data was selected
-automatically. These findings are retrieval-only and do not evaluate STT errors, RAG generation,
-frontend behavior, or a production Goa/Konkani document corpus. Re-run the same leakage-safe
-protocol when the target corpus and real voice-derived queries become available.
+These findings are retrieval-only and do not evaluate STT errors, RAG generation, frontend behavior,
+or a production Goa/Konkani document corpus. The current Hub revision has a validation-only Telugu
+file, which is treated as a zero-shot holdout. Re-run the same leakage-safe protocol when the target
+corpus and real voice-derived queries become available.
 """
 
 
@@ -299,6 +312,7 @@ def run_finalization(
             warmup_queries=int(config["retrieval"]["warmup_queries"]),
         )
         quality = evaluate_rankings(backend.rankings, qrels)
+        language_quality = evaluate_rankings_by_language(backend.rankings, qrels)
         result = {
             "status": "ok",
             "sealed_test_evaluation": True,
@@ -316,6 +330,8 @@ def run_finalization(
             "normalization_method": config["retrieval"]["normalization_method"],
             "corpus_vectors": len(corpus_vectors),
             **quality,
+            "language_metrics": language_quality,
+            "language_count": len(language_quality),
             "query_embedding_p50_ms": embedding_stats["query_embedding_latency"]["p50_ms"],
             "corpus_embedding_time_ms": embedding_stats["corpus_embedding_time_ms"],
             "retrieval_mean_ms": backend.latency["mean_ms"],
