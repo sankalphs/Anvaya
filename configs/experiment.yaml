@@ -5,7 +5,7 @@ experiment:
 dataset:
   repository: ai4bharat/MSMARCO-XI
   revision: null  # resolved to and recorded as an immutable Hub commit SHA
-  language: auto  # repository default (Hindi) because MSMARCO-XI has no Konkani config
+  language: all  # balanced multilingual study across every language file in this Hub revision
   dev_source_split: train
   test_source_split: validation
   dev_queries: 1000
@@ -15,7 +15,8 @@ dataset:
   passage_field: Translated_passages
   query_field: query
   output_dir: data/processed
-  retain_raw_parquet: false  # files are 0.46-3.72 GB; processed artifacts remain cached
+  download_workers: 8
+  retain_raw_parquet: true  # full raw snapshot is retained and verified under cache/huggingface/full
 
 cache:
   root: cache
@@ -99,6 +100,13 @@ index_ablation:
       index_type: ivf_flat
       nlist: 128
       nprobe: 16
+    - name: faiss_ivf_pq
+      engine: faiss
+      index_type: ivf_pq
+      nlist: 128
+      nprobe: 16
+      pq_m: 16
+      pq_nbits: 8
     - name: qdrant_local
       engine: qdrant_local
       distance: cosine

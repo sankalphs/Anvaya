@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -35,14 +37,14 @@ FROZEN_MAX_OUTPUT_TOKENS = 128
 WARMUP_QUERY = "यूनाइटेड किंगडम में कौन से चार देश शामिल हैं"
 WARMUP_PASSAGE = "यूनाइटेड किंगडम में इंग्लैंड, स्कॉटलैंड, वेल्स और उत्तरी आयरलैंड शामिल हैं"
 FROZEN_RETRIEVAL = {
-    "model": "BAAI/bge-m3",
-    "chunking_strategy": "sentence",
+    "model": "intfloat/multilingual-e5-small",
+    "chunking_strategy": "fixed_words",
     "chunk_size_words": 128,
     "index_engine": "faiss",
-    "index_type": "hnsw",
-    "m": 32,
-    "ef_construction": 200,
-    "ef_search": 128,
+    "index_type": "flat_l2",
+    "m": None,
+    "ef_construction": None,
+    "ef_search": None,
     "search_oversample": 20,
     "normalization_method": "float32_l2_v1",
     "top_k": FROZEN_TOP_K,
@@ -58,9 +60,7 @@ class Retriever(Protocol):
 
 
 class Generator(Protocol):
-    def generate(
-        self, question: str, contexts: list[Any], *, prompt_variant: str
-    ) -> Any: ...
+    def generate(self, question: str, contexts: list[Any], *, prompt_variant: str) -> Any: ...
 
 
 class VoiceRAGHarness:
@@ -73,11 +73,20 @@ class VoiceRAGHarness:
         retriever: Retriever,
         generator: Generator,
         stt: Any | None = None,
+        orchestrator: str = "native",
     ) -> None:
         self.embedder = embedder
         self.retriever = retriever
         self.generator = generator
         self.stt = stt
+        if orchestrator not in {"native", "langgraph"}:
+            raise ValueError("orchestrator must be 'native' or 'langgraph'")
+        self.orchestrator = orchestrator
+        self._graph = None
+        if orchestrator == "langgraph":
+            from hh_goa_rag.orchestration import build_langgraph
+
+            self._graph = build_langgraph(self._handle_transcript)
 
     @classmethod
     def from_frozen_artifacts(
@@ -116,19 +125,30 @@ class VoiceRAGHarness:
             ),
         )
         stt = SarvamSTT.from_env(env_path) if include_stt else None
+        orchestrator = os.getenv("HH_RAG_ORCHESTRATOR", "native").strip().lower()
         generator.warm_up()
         embedder.warm_up(WARMUP_QUERY, WARMUP_PASSAGE, rounds=1)
-        return cls(embedder=embedder, retriever=retriever, generator=generator, stt=stt)
+        return cls(
+            embedder=embedder,
+            retriever=retriever,
+            generator=generator,
+            stt=stt,
+            orchestrator=orchestrator,
+        )
 
     def handle_text(
         self,
         transcript: object,
         *,
+        language_code: str | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> GuardrailResponse:
-        return self._handle_transcript(
+        return self._dispatch_transcript(
             transcript,
             operation_started=time.perf_counter_ns(),
+            base_metadata=(
+                {"input_language": language_code} if language_code is not None else None
+            ),
             on_stage=on_stage,
         )
 
@@ -136,6 +156,7 @@ class VoiceRAGHarness:
         self,
         audio_path: str | Path,
         *,
+        language_code: str = "hi-IN",
         on_stage: Callable[[str], None] | None = None,
     ) -> GuardrailResponse:
         operation_started = time.perf_counter_ns()
@@ -150,7 +171,7 @@ class VoiceRAGHarness:
         _notify_stage(on_stage, "Transcribing")
         started = time.perf_counter_ns()
         try:
-            result = self.stt.transcribe_rest(audio_path)
+            result = self.stt.transcribe_rest(audio_path, language_code=language_code)
         except Exception:
             stages["stt"] = _elapsed_ms(started)
             return _response(
@@ -165,6 +186,7 @@ class VoiceRAGHarness:
             "model": _field(result, "model", "saaras:v3"),
             "status": _field(result, "status", "error"),
             "error_code": _field(result, "error_code", None),
+            "requested_language": language_code,
         }
         if _field(result, "status", "error") != "ok":
             stt_reason = (
@@ -179,13 +201,44 @@ class VoiceRAGHarness:
                 operation_started,
                 metadata={"stt": stt_metadata},
             )
-        return self._handle_transcript(
+        return self._dispatch_transcript(
             _field(result, "transcript", ""),
             operation_started=operation_started,
             stages=stages,
-            base_metadata={"stt": stt_metadata},
+            base_metadata={"stt": stt_metadata, "input_language": language_code},
             on_stage=on_stage,
         )
+
+    def _dispatch_transcript(
+        self,
+        transcript: object,
+        *,
+        operation_started: int,
+        stages: dict[str, float] | None = None,
+        base_metadata: dict[str, Any] | None = None,
+        on_stage: Callable[[str], None] | None = None,
+    ) -> GuardrailResponse:
+        if self._graph is None:
+            response = self._handle_transcript(
+                transcript,
+                operation_started=operation_started,
+                stages=stages,
+                base_metadata=base_metadata,
+                on_stage=on_stage,
+            )
+        else:
+            result = self._graph.invoke(
+                {
+                    "transcript": transcript,
+                    "operation_started": operation_started,
+                    "stages": stages,
+                    "base_metadata": base_metadata,
+                    "on_stage": on_stage,
+                }
+            )
+            response = result["response"]
+        response.metadata.setdefault("orchestrator", self.orchestrator)
+        return response
 
     def close(self) -> None:
         close = getattr(self.embedder, "close", None)
@@ -274,7 +327,7 @@ class VoiceRAGHarness:
             ]
 
             started = time.perf_counter_ns()
-            sufficiency = evidence_sufficiency(contexts)
+            sufficiency = evidence_sufficiency(contexts, query=validation.normalized_transcript)
             stages["evidence_guardrail"] = _elapsed_ms(started)
             metadata["evidence_decision"] = sufficiency.to_dict()
             decision_trace.append(
@@ -349,6 +402,39 @@ class VoiceRAGHarness:
                     "reason_code": grounding.reason_code.value,
                 }
             )
+            if (
+                not grounding.valid
+                and grounding.reason_code != ReasonCode.MODEL_INSUFFICIENT_CONTEXT
+            ):
+                fallback = _extractive_kb_fallback(generation_contexts)
+                if fallback is not None:
+                    fallback_answer, fallback_parent_id = fallback
+                    metadata["generation"]["fallback"] = "extractive_kb"
+                    metadata["generation"]["fallback_reason"] = grounding.reason_code.value
+                    metadata["grounding"] = {
+                        "valid": True,
+                        "route": Route.ANSWER.value,
+                        "reason_code": ReasonCode.ANSWER_GROUNDED.value,
+                    }
+                    decision_trace.append(
+                        {
+                            "stage": "kb_fallback",
+                            "allow": True,
+                            "route": Route.ANSWER.value,
+                            "reason_code": ReasonCode.ANSWER_GROUNDED.value,
+                        }
+                    )
+                    return _response(
+                        Route.ANSWER,
+                        ReasonCode.ANSWER_GROUNDED,
+                        stages,
+                        operation_started,
+                        transcript=validation.normalized_transcript,
+                        answer=fallback_answer,
+                        retrieved_ids=retrieved_ids,
+                        citations=(fallback_parent_id,),
+                        metadata=metadata,
+                    )
             return _response(
                 grounding.route,
                 grounding.reason_code,
@@ -438,6 +524,26 @@ def _empty_stages() -> dict[str, float]:
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
     return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
+
+
+def _extractive_kb_fallback(
+    contexts: list[GenerationContext],
+) -> tuple[str, str] | None:
+    """Return a bounded verbatim KB sentence when the model output is unusable.
+
+    This is deliberately extractive: it cannot introduce model knowledge, and it
+    is only reachable after retrieval sufficiency has already passed.
+    """
+
+    for context in contexts[:3]:
+        text = str(context.text).strip()
+        if not text:
+            continue
+        sentence = re.split(r"(?<=[.!?।])\s+", text, maxsplit=1)[0].strip()
+        answer = sentence or text
+        if answer:
+            return answer[:500], context.parent_id
+    return None
 
 
 def _elapsed_ms(started: int) -> float:

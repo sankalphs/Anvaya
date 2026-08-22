@@ -53,6 +53,20 @@ def evaluate_rankings(
     return result
 
 
+def evaluate_rankings_by_language(
+    rankings: Mapping[str, Sequence[str]], qrels: Mapping[str, set[str]]
+) -> dict[str, dict[str, float]]:
+    """Report the same retrieval metrics per language-prefixed query ID."""
+    grouped: dict[str, dict[str, set[str]]] = defaultdict(dict)
+    for query_id, relevant in qrels.items():
+        language, _, _source_id = str(query_id).partition(":")
+        grouped[language or "unknown"][query_id] = relevant
+    return {
+        language: evaluate_rankings(rankings, language_qrels)
+        for language, language_qrels in sorted(grouped.items())
+    }
+
+
 def latency_percentiles(latencies_ms: Sequence[float]) -> dict[str, float]:
     if not latencies_ms:
         raise ValueError("latencies_ms cannot be empty")
@@ -64,4 +78,3 @@ def latency_percentiles(latencies_ms: Sequence[float]) -> dict[str, float]:
         "p95_ms": float(np.percentile(values, 95)),
         "p100_ms": float(np.max(values)),
     }
-

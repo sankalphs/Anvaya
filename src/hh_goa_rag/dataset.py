@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 
 from hh_goa_rag.config import stable_fingerprint
 from hh_goa_rag.io import write_json, write_jsonl
@@ -32,6 +33,7 @@ LANGUAGE_PREFIXES: dict[str, str] = {
     "ur": "urd",
 }
 DEFAULT_LANGUAGE = "hi"
+ALL_LANGUAGES = "all"
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,69 @@ class DatasetResolution:
     train_file: str | None
     validation_file: str | None
     available_languages: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FullDatasetManifest:
+    repository: str
+    revision: str
+    root: str
+    parquet_files: tuple[dict[str, Any], ...]
+    total_bytes: int
+
+
+def _discover_language_files(
+    api: HfApi, repository: str, revision: str | None
+) -> tuple[str, dict[str, dict[str, str]]]:
+    info = api.dataset_info(repository, revision=revision, files_metadata=True)
+    files = {sibling.rfilename for sibling in info.siblings}
+    by_language: dict[str, dict[str, str]] = {}
+    for language, prefix in LANGUAGE_PREFIXES.items():
+        for split, folder, suffix in (
+            ("train", "train", "train"),
+            ("validation", "validation", "val"),
+        ):
+            expected = f"{folder}/{prefix}{suffix}.parquet"
+            if expected in files:
+                by_language.setdefault(language, {})[split] = expected
+    return info.sha, by_language
+
+
+def discover_resolutions(
+    repository: str,
+    requested_language: str = ALL_LANGUAGES,
+    revision: str | None = None,
+    *,
+    api: HfApi | None = None,
+) -> dict[str, DatasetResolution]:
+    """Discover all language files and return immutable per-language resolutions."""
+    resolved_revision, by_language = _discover_language_files(
+        api or HfApi(), repository, revision
+    )
+    available = tuple(sorted(by_language))
+    if not available:
+        raise RuntimeError(f"No recognized MSMARCO-XI parquet files found in {repository}")
+    if (
+        requested_language not in (ALL_LANGUAGES, "auto")
+        and requested_language not in by_language
+    ):
+        raise ValueError(
+            f"Language {requested_language!r} unavailable; discovered {list(available)}"
+        )
+    selected = available if requested_language == ALL_LANGUAGES else (
+        DEFAULT_LANGUAGE if requested_language == "auto" else requested_language,
+    )
+    return {
+        language: DatasetResolution(
+            repository=repository,
+            revision=resolved_revision,
+            language=language,
+            train_file=by_language[language].get("train"),
+            validation_file=by_language[language].get("validation"),
+            available_languages=available,
+        )
+        for language in selected
+    }
 
 
 def discover_resolution(
@@ -56,32 +121,98 @@ def discover_resolution(
     The dataset's legacy loading script is no longer honored by recent versions of
     ``datasets``. File discovery is therefore based on the actual parquet inventory.
     """
-    info = (api or HfApi()).dataset_info(repository, revision=revision, files_metadata=True)
-    files = {sibling.rfilename for sibling in info.siblings}
-    by_language: dict[str, dict[str, str]] = {}
-    for language, prefix in LANGUAGE_PREFIXES.items():
-        for split, folder, suffix in (
-            ("train", "train", "train"),
-            ("validation", "validation", "val"),
-        ):
-            expected = f"{folder}/{prefix}{suffix}.parquet"
-            if expected in files:
-                by_language.setdefault(language, {})[split] = expected
+    resolutions = discover_resolutions(
+        repository, requested_language, revision, api=api
+    )
+    if len(resolutions) != 1:
+        raise ValueError(
+            "discover_resolution accepts one language; use discover_resolutions for all"
+        )
+    return next(iter(resolutions.values()))
 
-    available = tuple(sorted(by_language))
-    if not available:
-        raise RuntimeError(f"No recognized MSMARCO-XI parquet files found in {repository}")
-    language = DEFAULT_LANGUAGE if requested_language == "auto" else requested_language
-    if language not in by_language:
-        raise ValueError(f"Language {language!r} unavailable; discovered {list(available)}")
-    selected = by_language[language]
-    return DatasetResolution(
+
+def download_full_dataset(
+    repository: str,
+    cache_dir: str | Path,
+    *,
+    revision: str | None = None,
+    max_workers: int = 8,
+    force: bool = False,
+    api: HfApi | None = None,
+) -> FullDatasetManifest:
+    """Download and verify every train/validation parquet in a pinned snapshot.
+
+    The Hub download is resumable and parallelized. This phase never samples or
+    deletes raw data; evaluation materialization is deliberately separate.
+    """
+    hub = api or HfApi()
+    info = hub.dataset_info(repository, revision=revision, files_metadata=True)
+    parquet = sorted(
+        (
+            sibling
+            for sibling in info.siblings
+            if re.fullmatch(r"(?:train|validation)/[^/]+\.parquet", sibling.rfilename)
+        ),
+        key=lambda sibling: sibling.rfilename,
+    )
+    if not parquet:
+        raise RuntimeError(f"No train/validation parquet files found in {repository}")
+    root = Path(cache_dir) / "full" / info.sha
+    manifest_path = root / "full_dataset_manifest.json"
+    expected = [
+        {"path": item.rfilename, "size_bytes": int(item.size or 0)}
+        for item in parquet
+    ]
+    if not force and manifest_path.exists():
+        cached = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if cached.get("revision") == info.sha and all(
+            (root / item["path"]).is_file()
+            and (root / item["path"]).stat().st_size == item["size_bytes"]
+            for item in expected
+        ):
+            return FullDatasetManifest(
+                repository=repository,
+                revision=info.sha,
+                root=str(root),
+                parquet_files=tuple(expected),
+                total_bytes=sum(item["size_bytes"] for item in expected),
+            )
+    root.mkdir(parents=True, exist_ok=True)
+    snapshot_download(
+        repo_id=repository,
+        repo_type="dataset",
+        revision=info.sha,
+        local_dir=root,
+        allow_patterns=[item["path"] for item in expected],
+        max_workers=max(1, int(max_workers)),
+    )
+    missing = [
+        item
+        for item in expected
+        if not (root / item["path"]).is_file()
+        or (root / item["path"]).stat().st_size != item["size_bytes"]
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Full dataset verification failed for {len(missing)} files: {missing[:3]}"
+        )
+    record = {
+        "format_version": 1,
+        "repository": repository,
+        "revision": info.sha,
+        "root": str(root),
+        "max_workers": max(1, int(max_workers)),
+        "parquet_files": expected,
+        "total_bytes": sum(item["size_bytes"] for item in expected),
+        "verified": True,
+    }
+    write_json(manifest_path, record)
+    return FullDatasetManifest(
         repository=repository,
         revision=info.sha,
-        language=language,
-        train_file=selected.get("train"),
-        validation_file=selected.get("validation"),
-        available_languages=available,
+        root=str(root),
+        parquet_files=tuple(expected),
+        total_bytes=int(record["total_bytes"]),
     )
 
 
@@ -176,7 +307,8 @@ def materialize_rows(
     seen_queries: set[str] = set()
 
     for row in rows:
-        query_id = str(row["query_id"])
+        source_query_id = str(row["query_id"])
+        query_id = f"{language}:{source_query_id}"
         if query_id in seen_queries:
             continue
         passages = row["passages"]
@@ -230,16 +362,23 @@ def inspect_schema(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def prepare_dataset(config: dict[str, Any], *, force: bool = False) -> Path:
-    """Download/stream, inspect, sample, and cache development and sealed test data."""
+    """Download the full snapshot, then materialize balanced multilingual eval artifacts."""
     dataset_config = config["dataset"]
     seed = int(config["experiment"]["seed"])
-    resolution = discover_resolution(
+    requested_language = dataset_config.get("language", ALL_LANGUAGES)
+    resolutions = discover_resolutions(
+        dataset_config["repository"], requested_language, dataset_config.get("revision")
+    )
+    full_download = download_full_dataset(
         dataset_config["repository"],
-        dataset_config.get("language", "auto"),
-        dataset_config.get("revision"),
+        config["cache"]["huggingface"],
+        revision=next(iter(resolutions.values())).revision,
+        max_workers=int(dataset_config.get("download_workers", 8)),
     )
     artifact_identity = {
-        "resolution": asdict(resolution),
+        "repository": dataset_config["repository"],
+        "revision": full_download.revision,
+        "languages": sorted(resolutions),
         "seed": seed,
         "dev_queries": int(dataset_config["dev_queries"]),
         "test_queries": int(dataset_config["test_queries"]),
@@ -247,62 +386,105 @@ def prepare_dataset(config: dict[str, Any], *, force: bool = False) -> Path:
         "max_rows_scanned_multiplier": int(dataset_config["max_rows_scanned_multiplier"]),
         "passage_field": dataset_config["passage_field"],
         "query_field": dataset_config["query_field"],
+        "balanced_by_language": requested_language == ALL_LANGUAGES,
     }
     output_dir = Path(dataset_config["output_dir"]) / stable_fingerprint(artifact_identity)
     manifest_path = output_dir / "manifest.json"
     if manifest_path.exists() and not force:
         return output_dir
 
-    cache_dir = Path(config["cache"]["huggingface"])
     split_specs = {
         "dev": (dataset_config["dev_source_split"], int(dataset_config["dev_queries"])),
         "test": (dataset_config["test_source_split"], int(dataset_config["test_queries"])),
     }
     split_stats: dict[str, Any] = {}
-    schema: dict[str, Any] | None = None
-    for output_split, (source_split, count) in split_specs.items():
-        parquet_path = download_split(resolution, source_split, cache_dir)
-        try:
+    schemas: dict[str, dict[str, Any]] = {}
+    raw_root = Path(full_download.root)
+    for output_split, (source_split, total_count) in split_specs.items():
+        split_resolutions = {
+            language: resolution
+            for language, resolution in resolutions.items()
+            if (resolution.train_file if source_split == "train" else resolution.validation_file)
+        }
+        if not split_resolutions:
+            raise RuntimeError(f"No {source_split} files available for selected languages")
+        base, remainder = divmod(total_count, len(split_resolutions))
+        all_corpus: dict[str, dict[str, Any]] = {}
+        all_queries: list[dict[str, Any]] = []
+        all_qrels: list[dict[str, Any]] = []
+        language_stats: dict[str, Any] = {}
+        for offset, (language, resolution) in enumerate(sorted(split_resolutions.items())):
+            count = base + int(offset < remainder)
+            filename = (
+                resolution.train_file
+                if source_split == "train"
+                else resolution.validation_file
+            )
+            assert filename is not None
+            parquet_path = raw_root / filename
             max_scanned = count * int(dataset_config["max_rows_scanned_multiplier"])
             selected, scanned = select_rows(
                 iter_parquet_rows(parquet_path),
                 count=count,
                 seed=seed,
-                split=source_split,
+                split=f"{source_split}:{language}",
                 acceptance_rate=float(dataset_config["sampling_acceptance_rate"]),
                 max_rows_scanned=max_scanned,
             )
-        finally:
-            if not bool(dataset_config.get("retain_raw_parquet", False)):
-                parquet_path.unlink(missing_ok=True)
-        if schema is None:
-            schema = inspect_schema(selected[0])
-        corpus, queries, qrels = materialize_rows(
-            selected,
-            language=resolution.language,
-            passage_field=dataset_config["passage_field"],
-            query_field=dataset_config["query_field"],
+            schemas[language] = inspect_schema(selected[0])
+            corpus, queries, qrels = materialize_rows(
+                selected,
+                language=language,
+                passage_field=dataset_config["passage_field"],
+                query_field=dataset_config["query_field"],
+            )
+            all_corpus.update({item["passage_id"]: item for item in corpus})
+            all_queries.extend(queries)
+            all_qrels.extend(qrels)
+            language_stats[language] = {
+                "requested_queries": count,
+                "rows_scanned": scanned,
+                "queries": len(queries),
+                "unique_parent_passages": len(corpus),
+                "qrels": len(qrels),
+            }
+        write_jsonl(
+            output_dir / f"{output_split}_corpus.jsonl",
+            sorted(all_corpus.values(), key=lambda item: item["passage_id"]),
         )
-        write_jsonl(output_dir / f"{output_split}_corpus.jsonl", corpus)
-        write_jsonl(output_dir / f"{output_split}_queries.jsonl", queries)
-        write_jsonl(output_dir / f"{output_split}_qrels.jsonl", qrels)
+        write_jsonl(
+            output_dir / f"{output_split}_queries.jsonl",
+            sorted(all_queries, key=lambda item: item["query_id"]),
+        )
+        write_jsonl(
+            output_dir / f"{output_split}_qrels.jsonl",
+            sorted(all_qrels, key=lambda item: (item["query_id"], item["passage_id"])),
+        )
         split_stats[output_split] = {
             "source_split": source_split,
-            "rows_scanned": scanned,
-            "queries": len(queries),
-            "unique_parent_passages": len(corpus),
-            "qrels": len(qrels),
+            "languages": sorted(language_stats),
+            "rows_scanned": sum(item["rows_scanned"] for item in language_stats.values()),
+            "queries": len(all_queries),
+            "unique_parent_passages": len(all_corpus),
+            "qrels": len(all_qrels),
+            "by_language": language_stats,
         }
 
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "artifact_fingerprint": output_dir.name,
         "artifact_identity": artifact_identity,
-        "dataset_schema": schema,
+        "full_download": asdict(full_download),
+        "dataset_schema_by_language": schemas,
         "splits": split_stats,
         "leakage_policy": {
-            "development": "A deterministic sample of the upstream train parquet.",
-            "test": "A deterministic sample of the upstream validation parquet; final winner only.",
+            "development": (
+                "A deterministic, language-balanced sample of every available upstream train file."
+            ),
+            "test": (
+                "A deterministic, language-balanced sample of every available upstream validation "
+                "file; final winner only."
+            ),
             "gold_unit": (
                 "Parent passage ID; retrieved chunks are mapped to their parent before scoring."
             ),

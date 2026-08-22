@@ -11,7 +11,7 @@ from rich.table import Table
 
 from hh_goa_rag.chunking_ablation import run_chunking_ablation
 from hh_goa_rag.config import load_config
-from hh_goa_rag.dataset import prepare_dataset, read_manifest
+from hh_goa_rag.dataset import download_full_dataset, prepare_dataset, read_manifest
 from hh_goa_rag.embedding_ablation import run_embedding_ablation
 from hh_goa_rag.finalization import run_finalization
 from hh_goa_rag.index_ablation import run_index_ablation
@@ -41,6 +41,23 @@ def _dataset_prepare(args: argparse.Namespace) -> int:
     console.print(f"Artifacts: [bold]{output_dir}[/bold]")
     if args.json:
         print(json.dumps(manifest, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def _dataset_download_full(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    dataset_config = config["dataset"]
+    manifest = download_full_dataset(
+        dataset_config["repository"],
+        config["cache"]["huggingface"],
+        revision=dataset_config.get("revision"),
+        max_workers=int(dataset_config.get("download_workers", 8)),
+        force=args.force,
+    )
+    print(f"Downloaded and verified {len(manifest.parquet_files)} parquet files")
+    print(f"Revision: {manifest.revision}")
+    print(f"Bytes: {manifest.total_bytes}")
+    print(f"Root: {manifest.root}")
     return 0
 
 
@@ -91,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--force", action="store_true")
     prepare_parser.add_argument("--json", action="store_true")
     prepare_parser.set_defaults(handler=_dataset_prepare)
+    download_parser = dataset_subparsers.add_parser(
+        "download-full", help="Download and verify every dataset parquet"
+    )
+    download_parser.add_argument("--force", action="store_true")
+    download_parser.set_defaults(handler=_dataset_download_full)
     embedding_parser = subparsers.add_parser("embedding", help="Embedding-model ablation")
     embedding_subparsers = embedding_parser.add_subparsers(
         dest="embedding_command", required=True

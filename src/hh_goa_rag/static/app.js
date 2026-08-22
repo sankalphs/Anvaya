@@ -25,18 +25,25 @@ const elements = {
   textQuery: document.querySelector("#text-query"),
   textCount: document.querySelector("#text-count"),
   textSubmitButton: document.querySelector("#text-submit-button"),
+  languageSelect: document.querySelector("#language-select"),
+  formatChip: document.querySelector(".voice-only-format"),
   alert: document.querySelector("#alert"),
   progressPanel: document.querySelector("#progress-panel"),
   activeStage: document.querySelector("#active-stage"),
+  traceLabel: document.querySelector("#trace-label"),
   stageList: document.querySelector("#stage-list"),
   resultPanel: document.querySelector("#result-panel"),
   routeBadge: document.querySelector("#route-badge"),
   latency: document.querySelector("#latency"),
   transcript: document.querySelector("#transcript"),
+  queryKind: document.querySelector("#query-kind"),
   answerLabel: document.querySelector("#answer-label"),
+  answerVisibilityLabel: document.querySelector("#answer-visibility-label"),
   answer: document.querySelector("#answer"),
   reasonCode: document.querySelector("#reason-code"),
   evidenceBlock: document.querySelector("#evidence-block"),
+  evidenceTitle: document.querySelector("#evidence-title"),
+  evidenceHelper: document.querySelector("#evidence-helper"),
   sourceCount: document.querySelector("#source-count"),
   evidenceList: document.querySelector("#evidence-list"),
   metricGrid: document.querySelector("#metric-grid"),
@@ -57,6 +64,7 @@ const recording = {
 };
 
 let progressRequestId = null;
+let lastQueryKind = "voice";
 
 elements.recordButton.addEventListener("click", startRecording);
 elements.stopButton.addEventListener("click", () => stopRecording(true));
@@ -79,6 +87,7 @@ function setInputMode(mode) {
   elements.textModeButton.setAttribute("aria-selected", String(textMode));
   elements.voiceInputPanel.hidden = textMode;
   elements.textInputPanel.hidden = !textMode;
+  elements.formatChip.hidden = textMode;
   clearAlert();
   if (textMode) window.setTimeout(() => elements.textQuery.focus(), 0);
 }
@@ -255,11 +264,14 @@ async function submitAudio(wavBlob) {
   resetStages();
   elements.progressPanel.hidden = false;
   elements.activeStage.textContent = "Preparing audio";
+  lastQueryKind = "voice";
+  elements.traceLabel.textContent = "Voice path · observed stages only";
   const requestId = makeRequestId();
   progressRequestId = requestId;
   pollProgress(requestId);
   const form = new FormData();
   form.append("audio", wavBlob, "voice-query.wav");
+  form.append("language_code", elements.languageSelect.value);
   try {
     const response = await fetch("/api/query/audio", {
       method: "POST",
@@ -271,7 +283,7 @@ async function submitAudio(wavBlob) {
       throw new UserFacingError(payload.detail || "The backend could not process this audio.");
     }
     progressRequestId = null;
-    markProgress({ stage: "Complete", history: ["Complete"], complete: true });
+    await showFinalProgress(requestId);
     renderResult(payload);
   } catch (error) {
     progressRequestId = null;
@@ -295,6 +307,8 @@ async function submitText() {
   resetStages();
   elements.progressPanel.hidden = false;
   elements.activeStage.textContent = "Preparing text";
+  lastQueryKind = "text";
+  elements.traceLabel.textContent = "Text path · STT skipped · observed stages only";
   const requestId = makeRequestId();
   progressRequestId = requestId;
   pollProgress(requestId);
@@ -305,14 +319,14 @@ async function submitText() {
         "Content-Type": "application/json",
         "X-Request-ID": requestId,
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, language_code: elements.languageSelect.value }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new UserFacingError(payload.detail || "The backend could not process this question.");
     }
     progressRequestId = null;
-    markProgress({ stage: "Complete", history: ["Complete"], complete: true });
+    await showFinalProgress(requestId);
     renderResult(payload);
   } catch (error) {
     progressRequestId = null;
@@ -337,6 +351,21 @@ async function pollProgress(requestId) {
   }
 }
 
+async function showFinalProgress(requestId) {
+  try {
+    const response = await fetch(`/api/query/status/${encodeURIComponent(requestId)}`, {
+      cache: "no-store",
+    });
+    if (response.ok) {
+      markProgress(await response.json());
+      return;
+    }
+  } catch (_error) {
+    // The response remains authoritative if the final observation is unavailable.
+  }
+  markProgress({ stage: "Complete", history: ["Complete"], complete: true });
+}
+
 function markProgress(progress) {
   const seen = new Set(progress.history || []);
   elements.activeStage.textContent = progress.stage || "Processing";
@@ -358,8 +387,12 @@ function renderResult(data) {
       elements.routeBadge.classList.add("error");
     }
     elements.latency.textContent = `${formatMs(data.total_latency_ms)} measured request latency`;
+    elements.queryKind.textContent = `${lastQueryKind === "text" ? "Text" : "Voice"} input · final route`;
     elements.transcript.textContent = data.transcript || "No transcript was produced.";
     elements.answerLabel.textContent = data.route === "ANSWER" ? "Answer" : "Response";
+    elements.answerVisibilityLabel.textContent = data.route === "ANSWER"
+      ? "Generated from cited evidence"
+      : "No answer generated · retrieval evidence shown";
     elements.answer.textContent = responseText(data);
     elements.reasonCode.textContent = `Reason code · ${data.reason_code || "NONE"}`;
     renderEvidence(data);
@@ -387,7 +420,16 @@ function renderEvidence(data) {
     ? data.metadata.retrieved
     : [];
   const citations = new Set(data.citations || []);
-  elements.evidenceBlock.hidden = data.route !== "ANSWER" || evidence.length === 0;
+  elements.evidenceBlock.hidden = evidence.length === 0;
+  if (data.route === "ANSWER") {
+    elements.evidenceTitle.textContent = "What supports this answer";
+    elements.evidenceHelper.textContent =
+      "Green-marked passages were cited by the answer. Expand any row to inspect the exact retrieved text.";
+  } else {
+      elements.evidenceTitle.textContent = "What the retriever found";
+      elements.evidenceHelper.textContent =
+      "No answer was generated from these passages. Scores are vector similarity, not answer confidence; the KB guardrail must also find query-term evidence.";
+  }
   elements.sourceCount.textContent = `${evidence.length} passages · ${citations.size} cited`;
   evidence.forEach((item) => {
     const details = document.createElement("details");
@@ -429,11 +471,14 @@ function renderTechnicalDetails(data) {
   elements.metricGrid.replaceChildren();
   const timings = data.stage_latencies_ms || {};
   const metrics = [
-    ["STT", timings.stt],
+    ["STT", lastQueryKind === "text" ? "Skipped" : timings.stt],
+    ["Input check", timings.input_validation],
+    ["Route check", timings.route_check],
     ["Embedding", timings.query_embedding ?? timings.embedding],
     ["Search", timings.vector_search ?? timings.retrieval],
-    ["Guardrails", timings.guardrails],
-    ["Generation", timings.generation],
+    ["Evidence gate", timings.evidence_guardrail],
+    [data.route === "ANSWER" ? "Generation" : "Generation decision", timings.generation],
+    ["Grounding", timings.grounding_validation],
     ["Total", data.total_latency_ms],
   ];
   metrics.forEach(([label, value]) => {
@@ -442,7 +487,7 @@ function renderTechnicalDetails(data) {
     const name = document.createElement("span");
     name.textContent = label;
     const amount = document.createElement("strong");
-    amount.textContent = formatMs(value);
+    amount.textContent = typeof value === "string" ? value : formatStageMs(value, label);
     metric.append(name, amount);
     elements.metricGrid.append(metric);
   });
@@ -479,6 +524,7 @@ function setInputDisabled(disabled) {
   elements.upload.disabled = disabled;
   elements.textQuery.disabled = disabled;
   elements.textSubmitButton.disabled = disabled;
+  elements.languageSelect.disabled = disabled;
   setModeDisabled(disabled);
 }
 
@@ -594,6 +640,11 @@ function formatMs(value) {
   const number = Number(value || 0);
   if (number >= 1000) return `${(number / 1000).toFixed(2)} s`;
   return `${number.toFixed(number >= 10 ? 1 : 2)} ms`;
+}
+
+function formatStageMs(value, _label) {
+  const number = Number(value || 0);
+  return _label === "Total" || number > 0 ? formatMs(number) : "Not reached";
 }
 
 function makeRequestId() {

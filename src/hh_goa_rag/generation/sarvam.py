@@ -304,7 +304,8 @@ class SarvamGeneration:
 
 
 def _parse_answer(
-    raw_output: str, allowed_ids: set[str]
+    raw_output: str,
+    allowed_ids: set[str],
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     diagnostics: dict[str, Any] = {
         "schema_valid": False,

@@ -6,7 +6,11 @@ from typing import Any
 
 from hh_goa_rag.guardrails import ReasonCode, Route
 from hh_goa_rag.guardrails.types import STAGE_NAMES
-from hh_goa_rag.harness import FROZEN_PROMPT, FROZEN_TOP_K, VoiceRAGHarness
+from hh_goa_rag.harness import (
+    FROZEN_PROMPT,
+    FROZEN_TOP_K,
+    VoiceRAGHarness,
+)
 
 
 @dataclass(frozen=True)
@@ -33,7 +37,16 @@ class FakeRetriever:
     def __init__(self, score: float = 0.8) -> None:
         self.calls = 0
         self.contexts = [
-            Context(f"p-{index}", f"c-{index}", f"evidence {index}", score - index / 100)
+            Context(
+                f"p-{index}",
+                f"c-{index}",
+                (
+                    f"evidence {index}"
+                    if index == 1
+                    else f"evidence {index} गोल्डस्मिथ टेक्सास किस काउंटी में है"
+                ),
+                score - index / 100,
+            )
             for index in range(1, FROZEN_TOP_K + 3)
         ]
 
@@ -133,6 +146,35 @@ def test_low_retrieval_confidence_skips_generation() -> None:
     assert generator.calls == 0
 
 
+def test_invalid_model_output_falls_back_to_verbatim_kb_evidence() -> None:
+    generator = FakeGenerator(
+        {
+            "status": "ok",
+            "answer_status": "ANSWER",
+            "answer": "outside model knowledge",
+            "evidence_ids": ["p-1"],
+            "raw_output": json.dumps(
+                {
+                    "status": "ANSWER",
+                    "answer": "outside model knowledge",
+                    "evidence_ids": ["p-1"],
+                }
+            ),
+            "diagnostics": {"schema_valid": True},
+        }
+    )
+    harness = VoiceRAGHarness(
+        embedder=FakeEmbedder(), retriever=FakeRetriever(), generator=generator
+    )
+
+    response = harness.handle_text("गोल्डस्मिथ टेक्सास किस काउंटी में है")
+
+    assert response.route == Route.ANSWER
+    assert response.answer == "evidence 1"
+    assert response.citations == ("p-1",)
+    assert response.metadata["generation"]["fallback"] == "extractive_kb"
+
+
 def test_component_exception_fails_closed() -> None:
     harness = VoiceRAGHarness(
         embedder=FakeEmbedder(fail=True),
@@ -150,7 +192,7 @@ class FakeSTT:
     transcript: str = ""
     error_code: str | None = None
 
-    def transcribe_rest(self, _: object) -> FakeSTT:
+    def transcribe_rest(self, _: object, *, language_code: str = "hi-IN") -> FakeSTT:
         return self
 
 

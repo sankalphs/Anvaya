@@ -83,6 +83,13 @@ h2, h3 { margin: 0; letter-spacing: -.04em; }
 .mode-button:focus-visible { outline: 3px solid rgba(23,107,77,.28); outline-offset: 1px; }
 .mode-button:disabled { cursor: not-allowed; opacity: .48; }
 
+.language-control { display: grid; grid-template-columns: auto minmax(180px, 1fr); gap: 8px 14px; align-items: center; margin-top: 16px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.34); }
+.language-control label { color: var(--ink); font-size: 11px; font-weight: 850; }
+.language-control select { min-width: 0; padding: 9px 11px; border: 1px solid rgba(23,33,27,.2); border-radius: 9px; background: rgba(255,255,251,.88); color: var(--ink); font: inherit; font-size: 12px; }
+.language-control select:focus { border-color: var(--green); outline: 3px solid rgba(23,107,77,.12); }
+.language-control select:disabled { opacity: .55; }
+.language-control span { grid-column: 2; color: var(--muted-light); font-size: 10px; }
+
 .record-area { padding: 51px 0 34px; text-align: center; }
 .record-visual { height: 42px; display: flex; justify-content: center; align-items: center; gap: 6px; margin-bottom: 23px; }
 .record-visual span { width: 3px; height: 9px; border-radius: 999px; background: var(--green); opacity: .3; }
@@ -136,6 +143,14 @@ h2, h3 { margin: 0; letter-spacing: -.04em; }
 .transparency-card h2 { position: relative; font-family: Georgia, serif; font-size: clamp(28px, 3vw, 38px); font-weight: 400; line-height: .99; }
 .transparency-card h2 em { color: #afd7b8; font-weight: 400; }
 .aside-intro { position: relative; margin: 18px 0 0; color: #bed2c3; font-size: 12px; line-height: 1.65; }
+.architecture-map { position: relative; margin-top: 24px; }
+.architecture-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.architecture-node { padding: 9px 10px; border: 1px solid rgba(220,241,224,.18); border-radius: 9px; background: rgba(220,241,224,.07); }
+.architecture-node strong, .architecture-node small { display: block; }
+.architecture-node strong { color: #edf4ee; font-size: 10px; }
+.architecture-node small { margin-top: 3px; color: #afc8b5; font-size: 9px; line-height: 1.35; }
+.branch-node { border-color: rgba(141,221,155,.32); background: rgba(141,221,155,.1); }
+.architecture-arrow { display: block; height: 17px; color: #91c8a0; font-size: 13px; line-height: 17px; text-align: center; }
 .how-list { position: relative; list-style: none; padding: 0; margin: 29px 0 0; }
 .how-list li { display: grid; grid-template-columns: 29px 1fr; gap: 11px; padding: 14px 0; border-top: 1px solid rgba(220,241,224,.14); }
 .how-number { color: #91c8a0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
@@ -196,7 +211,7 @@ h2, h3 { margin: 0; letter-spacing: -.04em; }
 .technical-details > summary::marker { color: var(--green); }
 .summary-note { color: var(--muted); font-weight: 450; }
 .technical-content { padding: 3px 0 23px; }
-.metric-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.metric-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 .metric { padding: 12px 10px; border-radius: 10px; background: var(--paper); }
 .metric span, .metric strong { display: block; }
 .metric span { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }

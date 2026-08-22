@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,24 +60,48 @@ class ParentFaissRetriever:
         query = l2_normalize(query)
         search_k = min(self.index.ntotal, self.top_k * self.oversample)
         scores, positions = self.index.search(query, search_k)
-        result: list[RetrievedParent] = []
-        seen: set[str] = set()
+        best_by_parent: dict[str, RetrievedParent] = {}
         for score, position in zip(scores[0], positions[0], strict=True):
             if position < 0:
                 continue
             chunk = self.chunks[int(position)]
             parent_id = str(chunk["parent_id"])
-            if parent_id in seen:
-                continue
-            seen.add(parent_id)
-            result.append(
-                RetrievedParent(
-                    parent_id=parent_id,
-                    score=float(score),
-                    chunk_id=str(chunk["chunk_id"]),
-                    text=str(chunk["text"]),
-                )
+            # `faiss_flat_ip2` is the exact IndexFlatL2 baseline. Because the
+            # stored/query vectors are unit-normalized, squared L2 distance is
+            # equivalent to cosine similarity via cosine = 1 - distance / 2.
+            normalized_score = (
+                1.0 - float(score) / 2.0
+                if self.index.metric_type == faiss.METRIC_L2
+                else float(score)
             )
-            if len(result) == self.top_k:
-                break
-        return result
+            candidate = RetrievedParent(
+                parent_id=parent_id,
+                score=normalized_score,
+                chunk_id=str(chunk["chunk_id"]),
+                text=str(chunk["text"]),
+            )
+            current = best_by_parent.get(parent_id)
+            if current is None or _prefer_chunk(candidate, current):
+                best_by_parent[parent_id] = candidate
+        return sorted(best_by_parent.values(), key=lambda item: item.score, reverse=True)[
+            : self.top_k
+        ]
+
+
+_CHUNK_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _prefer_chunk(candidate: RetrievedParent, current: RetrievedParent) -> bool:
+    """Avoid returning a semantically empty trailing chunk for a parent.
+
+    Fixed-size chunking can leave a final fragment such as ``"है।"``.  That
+    fragment can win vector similarity while containing none of the evidence
+    needed by the answer generator.  Prefer a substantive candidate for the
+    same parent, then use similarity as the tie-breaker.
+    """
+
+    candidate_substantive = len(_CHUNK_TOKEN_RE.findall(candidate.text)) >= 5
+    current_substantive = len(_CHUNK_TOKEN_RE.findall(current.text)) >= 5
+    if candidate_substantive != current_substantive:
+        return candidate_substantive
+    return candidate.score > current.score

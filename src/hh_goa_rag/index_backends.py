@@ -85,6 +85,18 @@ def run_faiss(
         )
         index.train(corpus)
         index.nprobe = int(config["nprobe"])
+    elif index_type == "ivf_pq":
+        quantizer = faiss.IndexFlatIP(corpus.shape[1])
+        index = faiss.IndexIVFPQ(
+            quantizer,
+            corpus.shape[1],
+            int(config["nlist"]),
+            int(config["pq_m"]),
+            int(config["pq_nbits"]),
+            faiss.METRIC_INNER_PRODUCT,
+        )
+        index.train(corpus)
+        index.nprobe = int(config["nprobe"])
     else:
         raise ValueError(f"Unsupported FAISS index type: {index_type}")
     index.add(corpus)

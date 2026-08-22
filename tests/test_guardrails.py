@@ -83,9 +83,7 @@ def test_policy_routes_have_structured_reason_codes(
 
 
 def test_retrieval_uses_threshold_and_consistency_rescues() -> None:
-    assert evidence_sufficiency(contexts((0.67, 0.5, 0.4, 0.3, 0.2))).decision_rule == (
-        "top_score"
-    )
+    assert evidence_sufficiency(contexts((0.67, 0.5, 0.4, 0.3, 0.2))).decision_rule == ("top_score")
     corroborated = evidence_sufficiency(contexts((0.65, 0.647, 0.63, 0.62, 0.61)))
     assert corroborated.sufficient is True
     assert corroborated.decision_rule == "top_two_corroboration"
@@ -95,6 +93,26 @@ def test_retrieval_uses_threshold_and_consistency_rescues() -> None:
     rejected = evidence_sufficiency(contexts((0.66, 0.64, 0.62, 0.60, 0.58)))
     assert rejected.sufficient is False
     assert rejected.reason_code == ReasonCode.RETRIEVAL_LOW_CONFIDENCE
+
+
+def test_retrieval_requires_query_term_overlap_when_query_is_available() -> None:
+    rejected = evidence_sufficiency(contexts((0.9, 0.8, 0.7, 0.6, 0.5)), query="manhattan project")
+    assert rejected.sufficient is False
+    assert rejected.reason_code == ReasonCode.RETRIEVAL_LOW_CONFIDENCE
+    assert rejected.decision_rule == "no_query_term_overlap"
+
+
+def test_retrieval_accepts_cross_script_entity_overlap() -> None:
+    evidence = [
+        {
+            "parent_id": "p-ayahuasca",
+            "chunk_id": "c-ayahuasca",
+            "text": "आयाहुआस्का एक एंथियोजेनिक ब्रू है।",
+            "score": 0.86,
+        }
+    ]
+    decision = evidence_sufficiency(evidence, query="What is ayahuasca?")
+    assert decision.sufficient is True
 
 
 def generation(

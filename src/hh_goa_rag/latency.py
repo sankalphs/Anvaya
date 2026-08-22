@@ -73,7 +73,7 @@ def select_extractive_answer(
     min_retrieval_score: float = 0.80,
     min_lexical_overlap: float = 0.12,
 ) -> ExtractiveAnswer:
-    """Select one verbatim evidence sentence, otherwise require generator fallback.
+    """Select one verbatim evidence sentence, otherwise return no extractive answer.
 
     This is deliberately conservative. It never synthesizes words and therefore cannot
     introduce a fact absent from the cited passage.
@@ -100,7 +100,7 @@ def select_extractive_answer(
         return ExtractiveAnswer("", (), 0.0, _elapsed_ms(started), False, "no_sentence")
     lexical = len(query_tokens & tokens(best[1])) / max(1, len(query_tokens))
     eligible = top_score >= min_retrieval_score and lexical >= min_lexical_overlap
-    reason = "high_confidence_verbatim" if eligible else "uncertain_fallback"
+    reason = "high_confidence_verbatim" if eligible else "uncertain"
     return ExtractiveAnswer(
         best[1] if eligible else "",
         (best[2],) if eligible else (),
