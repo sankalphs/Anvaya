@@ -1,8 +1,16 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from hh_goa_rag.dataset import discover_resolution, materialize_rows, select_rows
+import hh_goa_rag.dataset as dataset_module
+from hh_goa_rag.dataset import (
+    discover_resolution,
+    discover_resolutions,
+    download_full_dataset,
+    materialize_rows,
+    select_rows,
+)
 
 
 class FakeApi:
@@ -30,6 +38,39 @@ def test_discovers_default_language_and_missing_train_split() -> None:
 def test_unknown_language_lists_discovered_options() -> None:
     with pytest.raises(ValueError, match="unavailable"):
         discover_resolution("repo", "xx", api=FakeApi())
+
+
+def test_discovers_all_available_languages() -> None:
+    resolutions = discover_resolutions("repo", "all", api=FakeApi())
+    assert sorted(resolutions) == ["hi", "te"]
+    assert resolutions["te"].train_file is None
+
+
+def test_full_download_is_resumable_and_size_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    siblings = [
+        SimpleNamespace(rfilename="train/hintrain.parquet", size=3),
+        SimpleNamespace(rfilename="validation/hinval.parquet", size=4),
+        SimpleNamespace(rfilename="README.md", size=1),
+    ]
+
+    class DownloadApi:
+        def dataset_info(self, *_args, **_kwargs):
+            return SimpleNamespace(sha="rev", siblings=siblings)
+
+    def fake_snapshot_download(*_args, local_dir: Path, allow_patterns: list[str], **_kwargs):
+        for relative in allow_patterns:
+            path = local_dir / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"123" if path.name.endswith("train.parquet") else b"1234")
+        return str(local_dir)
+
+    monkeypatch.setattr(dataset_module, "snapshot_download", fake_snapshot_download)
+    manifest = download_full_dataset("repo", tmp_path, api=DownloadApi())
+    assert manifest.revision == "rev"
+    assert manifest.total_bytes == 7
+    assert (tmp_path / "full" / "rev" / "full_dataset_manifest.json").exists()
 
 
 def test_select_rows_is_deterministic_and_requires_positive() -> None:
@@ -79,4 +120,3 @@ def test_materialize_rows_deduplicates_and_preserves_parent_qrels() -> None:
     assert len(qrels) == 2
     assert qrels[0]["passage_id"] == qrels[1]["passage_id"]
     assert queries[0]["text"] == "प्रश्न"
-
