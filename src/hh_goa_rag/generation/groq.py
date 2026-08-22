@@ -44,9 +44,12 @@ def _http_client_factory(**kwargs: Any) -> httpx.Client:
     kwargs.setdefault(
         "limits",
         httpx.Limits(
-            max_connections=1,
-            max_keepalive_connections=1,
-            keepalive_expiry=60.0,
+            # A single pooled connection turns one abandoned/slow request into
+            # head-of-line blocking for every later request on this client.
+            # Keep a few slots so a timed-out attempt cannot starve the tier.
+            max_connections=4,
+            max_keepalive_connections=2,
+            keepalive_expiry=30.0,
         ),
     )
     return httpx.Client(**kwargs)
@@ -126,8 +129,14 @@ class GroqGeneration:
         contexts: Sequence[GenerationContext | dict[str, Any]],
         *,
         prompt_variant: PromptVariant = "structured_evidence_ids",
+        language_code: str | None = None,
     ) -> GenerationResult:
-        messages = build_messages(question, contexts, variant=prompt_variant)
+        messages = build_messages(
+            question,
+            contexts,
+            variant=prompt_variant,
+            language_code=language_code,
+        )
         allowed_ids = {str(_field(context, "parent_id")) for context in contexts}
         started = time.perf_counter_ns()
         last_error: BaseException | None = None
@@ -180,6 +189,27 @@ class GroqGeneration:
         raise AssertionError(f"Unreachable retry state: {last_error}")
 
     def _request(self, messages: list[dict[str, str]]) -> dict[str, Any]:
+        try:
+            return self._send_request(messages)
+        except _HTTPFailure as failure:
+            # Provider APIs evolve: an unknown/renamed optional parameter
+            # surfaces as HTTP 400. Retry once with a minimal payload before
+            # giving up so the tier keeps working across API changes.
+            if failure.status != 400:
+                raise
+            print(
+                f"Groq rejected the request (HTTP 400); retrying without "
+                f"optional parameters: {_safe_error(failure)}",
+                flush=True,
+            )
+            return self._send_request(messages, include_optional_params=False)
+
+    def _send_request(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        include_optional_params: bool = True,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
@@ -190,11 +220,12 @@ class GroqGeneration:
         }
         if self.config.stream:
             payload["stream_options"] = {"include_usage": True}
-        if self.config.model.startswith("openai/gpt-oss-"):
-            payload["include_reasoning"] = False
-            payload["reasoning_effort"] = "low"
-        elif self.config.model.startswith("qwen/"):
-            payload["reasoning_effort"] = "none"
+        if include_optional_params:
+            if self.config.model.startswith("openai/gpt-oss-"):
+                payload["include_reasoning"] = False
+                payload["reasoning_effort"] = "low"
+            elif self.config.model.startswith("qwen/"):
+                payload["reasoning_effort"] = "none"
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",

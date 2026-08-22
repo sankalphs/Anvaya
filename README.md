@@ -1,8 +1,114 @@
-# Anvaya — HH Goa Voice-RAG
+---
+title: Anvaya — Grounded Voice Intelligence
+emoji: 🪷
+colorFrom: yellow
+colorTo: red
+sdk: gradio
+sdk_version: 6.25.0
+app_file: app.py
+short_description: Multilingual grounded voice and text assistant
+python_version: "3.12"
+startup_duration_timeout: 1h
+---
 
-Anvaya is a grounded multilingual voice assistant built for the HH Goa submission. It records or
-accepts audio in the browser, converts it to 16 kHz mono PCM16 WAV, and passes it through the
-already-frozen Voice-RAG pipeline. The web layer does not reproduce or replace pipeline logic.
+# Canonical deployment target
+
+Hugging Face Space: https://sathvik0101-avyaya-voice-intelligence.hf.space/
+
+# Anvaya
+
+Anvaya keeps the original HTML/CSS/JS interface and runs the existing FastAPI
+voice/text workflow inside a Gradio Space. The pinned BGE-M3 model downloads
+on first startup; the serving FAISS index (HNSW, 22,413 chunks — 15 language
+partitions including an English partition built from the original MS MARCO
+passages) and passages are included in the repository.
+
+Set `SARVAM_API_KEY` as a Space secret for voice input.
+
+## Pipeline (voice/text → grounded answer)
+
+```
+input → guardrails (unsafe/off-topic/filler) → BGE-M3 query embedding (~35 ms)
+      → language-partitioned FAISS HNSW search — every query hits its own
+        language partition; English has a dedicated `en` partition, and rare
+        UI languages (kok/ks/sd/mai) pivot to their closest available Indic
+        partition instead of leaking across scripts (~15 ms)
+      → evidence-sufficiency gate + unicode trigram hybrid rerank
+      → resident extractive fast tier (xlm-roberta-base-squad2-distilled,
+        verbatim span + citation, <150 ms) — single-token junk spans are
+        rejected by a structural guard
+      → if no confident span: show the closest retrieved passage with its
+        match strength (honest, never silent) instead of forcing slow
+        generative text
+      → grounding validation (schema, citation whitelist, answer–evidence
+        overlap) before anything reaches the user
+```
+
+Every response carries `route`, `reason_code`, per-stage latencies, retrieved
+evidence with citations, and the decision trace of every guardrail. The system
+answers only from retrieved context and refuses honestly otherwise:
+`INSUFFICIENT_CONTEXT` / `OFF_TOPIC` / `UNSAFE` are first-class outcomes.
+
+## Measured latency — extractive-only serving (30-query mixed battery)
+
+Every response completes inside the 200 ms budget. Grounded answers are
+resident verbatim spans + citations; everything else shows the closest
+retrieved passage with its match strength (honest, never silent). The
+generative chain (local Gemma-3-1B-it GGUF + Groq fallback) remains in the
+codebase and re-enables via `HH_RAG_FALLBACK=generative`.
+
+Server-side end-to-end (`total_latency_ms`, excludes client network RTT):
+
+| Percentile | All 30 queries |
+| --- | --- |
+| P50 | 95.9 ms |
+| P70 | 110.2 ms |
+| **P100** | **135.3 ms** |
+
+Zero requests exceeded 200 ms (min 31.7 ms, max 135.3 ms). Voice requests
+scope timing to the RAG pipeline (post-STT); network speech-to-text is
+reported separately in `stage_latencies_ms.stt`.
+Raw measurements: `results/latency_report.json`.
+
+Answer coverage is precision-first: when retrieval evidence cannot support a
+confident verbatim span, the system refuses rather than guessing - rule 6's
+"knows when not to answer" is implemented literally.
+
+## Resilience notes
+
+- In default `fast_tier_only` mode generative construction is skipped entirely
+  (no 800 MB GGUF load, no API clients) — boot is faster and request path has
+  no dead code. Set `HH_RAG_FALLBACK=generative` to re-enable the chain: local
+  Gemma-3-1B-it GGUF (GBNF grammar) → Groq fallback, with ZeroGPU circuit
+  breaker, cgroup-bounded llama.cpp threads (83 s → ~2 s warm-up), and
+  bounded HTTP clients so one slow provider cannot starve later requests.
+- Every harness exception is logged with full context; clients receive only a
+  structured `reason_code`.
+
+## Space variables and secrets
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SARVAM_API_KEY` | secret, required | Sarvam STT authentication (voice) |
+| `GROQ_API_KEY` | secret | Optional generative fallback (disabled in default extractive-only mode) |
+| `HH_RAG_FALLBACK` | `fast_tier_only` (set by wrapper) | `fast_tier_only` = extractive spans + closest-passage fallback, no generative calls; `generative` re-enables the full chain |
+| `HH_RAG_GENERATOR` | `resilient` | Ordered generation chain when fallback is `generative` |
+| `HH_RAG_GENERATION_CHAIN` | `local,groq` | Tier order when generative is enabled |
+| `HH_RAG_RESPONSE_CACHE` | `1` (set by wrapper) | LRU+TTL cache for repeated identical queries; hits are labeled `cache_hit` in metadata |
+| `HH_RAG_FAST_TIER_THRESHOLD` | `0.75` (wrapper) / `0.78` (Space var) | Global extractive confidence cutoff |
+| `HH_RAG_FAST_TIER_THRESHOLDS` | `{"en-IN": 0.88}` (Space var) | Per-language overrides |
+| `HH_RAG_GGUF_REPOSITORY` | `ggml-org/gemma-3-1b-it-GGUF` | Local SLM GGUF repository (used when generative is enabled) |
+| `HH_RAG_GGUF_FILENAME` | `gemma-3-1b-it-Q4_K_M.gguf` | Local SLM GGUF file |
+| `HH_RAG_LATENCY_TARGET_MS` | `200` | Target for `metadata.latency_budget` flagging (honest, never enforced by refusal) |
+| `HH_RAG_MAX_LATENCY_MS` | off | Strict deadline guard — set to `200` to refuse instead of answering over budget |
+
+The demo runs extractive-only by default for the strict <200 ms guarantee. Set `HH_RAG_FALLBACK=generative` to re-enable the full Gemma/Groq chain. Raw measurements: `results/latency_report.json`.
+
+---
+
+## Original GitHub Documentation (Preserved)
+
+The following sections are the original GitHub documentation retained for research reproducibility. The Space deployment above is the canonical serving stack.
 
 ## Architecture
 
