@@ -20,7 +20,11 @@ from hh_goa_rag.config import stable_fingerprint
 from hh_goa_rag.embedding_ablation import resolve_data_dir
 from hh_goa_rag.index_backends import run_chroma_local, run_faiss, run_qdrant_local
 from hh_goa_rag.io import read_jsonl, write_json
-from hh_goa_rag.metrics import evaluate_rankings, qrels_by_query
+from hh_goa_rag.metrics import (
+    evaluate_rankings,
+    evaluate_rankings_by_language,
+    qrels_by_query,
+)
 from hh_goa_rag.models import MODEL_SPECS, EmbeddingModel, acquire_model, safe_model_name
 from hh_goa_rag.reporting import markdown_table, write_csv
 from hh_goa_rag.retrieval import build_flat_ip
@@ -180,6 +184,7 @@ def _embedding_rows(
             warmup_queries=int(retrieval["warmup_queries"]),
         )
         quality = evaluate_rankings(rankings, qrels)
+        language_quality = evaluate_rankings_by_language(rankings, qrels)
         metadata = encoded["metadata"]
         row = {
             "status": "ok",
@@ -193,14 +198,22 @@ def _embedding_rows(
             "embedding_dtype": metadata["dtype"],
             "corpus_chunks": len(chunks),
             **quality,
+            "language_metrics": json.dumps(
+                language_quality, ensure_ascii=False, sort_keys=True
+            ),
+            "language_count": len(language_quality),
             "corpus_embedding_time_ms": metadata["corpus_embedding_time_ms"],
             "corpus_embedding_ms_per_chunk": metadata["corpus_embedding_ms_per_chunk"],
             "query_embedding_mean_ms": metadata["query_embedding_latency"]["mean_ms"],
             "query_embedding_p50_ms": metadata["query_embedding_latency"]["p50_ms"],
+            "query_embedding_p70_ms": metadata["query_embedding_latency"]["p70_ms"],
             "query_embedding_p95_ms": metadata["query_embedding_latency"]["p95_ms"],
+            "query_embedding_p100_ms": metadata["query_embedding_latency"]["p100_ms"],
             "retrieval_mean_ms": retrieval_latency["mean_ms"],
             "retrieval_p50_ms": retrieval_latency["p50_ms"],
+            "retrieval_p70_ms": retrieval_latency["p70_ms"],
             "retrieval_p95_ms": retrieval_latency["p95_ms"],
+            "retrieval_p100_ms": retrieval_latency["p100_ms"],
             **index_stats,
             "model_cache_path": encoded["model_cache_path"],
             "embedding_cache_path": encoded["embedding_cache_path"],
@@ -284,9 +297,17 @@ def _index_rows(
             "cosine_equivalent": True,
             "index_device": "cpu",
             **evaluate_rankings(result.rankings, qrels),
+            "language_metrics": json.dumps(
+                evaluate_rankings_by_language(result.rankings, qrels),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "language_count": len(evaluate_rankings_by_language(result.rankings, qrels)),
             "retrieval_mean_ms": result.latency["mean_ms"],
             "retrieval_p50_ms": result.latency["p50_ms"],
+            "retrieval_p70_ms": result.latency["p70_ms"],
             "retrieval_p95_ms": result.latency["p95_ms"],
+            "retrieval_p100_ms": result.latency["p100_ms"],
             **result.stats,
             "seed": config["experiment"]["seed"],
             "faiss_version": faiss.__version__,
@@ -317,10 +338,9 @@ def run_small_ablation(
     embedding_winner = _select(
         embedding_rows, list(stage["selection_metrics"]), "query_embedding_p50_ms"
     )
-    selected_vectors = vectors_by_model[embedding_winner["model"]]
-    index_rows = _index_rows(
-        config, chunks, queries, qrels, selected_vectors, resolved_data
-    )
+    index_rows: list[dict[str, Any]] = []
+    for encoded in vectors_by_model.values():
+        index_rows.extend(_index_rows(config, chunks, queries, qrels, encoded, resolved_data))
     write_csv(OUTPUT_ROOT / "small_index_ablation.csv", index_rows)
     index_winner = _select(index_rows, list(stage["selection_metrics"]), "retrieval_p50_ms")
     summary = {
@@ -329,6 +349,7 @@ def run_small_ablation(
         "split": split,
         "chunk_artifact": str(chunk_path),
         "embedding_winner": embedding_winner["model"],
+        "index_winner_model": index_winner["model"],
         "index_winner": index_winner["backend"],
         "selection_metrics_in_priority_order": stage["selection_metrics"],
         "embedding_results": str(OUTPUT_ROOT / "small_embedding_ablation.csv"),
@@ -348,9 +369,9 @@ def run_small_ablation(
         "model", "embedding_dimension", "model_size_bytes", "recall_at_1", "recall_at_5",
         "recall_at_10", "mrr_at_10", "query_embedding_p50_ms", "retrieval_p50_ms",
     ]))
-    print("\nIndex ablation on the selected small embedding: " + embedding_winner["model"])
+    print("\nPaired index ablation on both embeddings")
     print(markdown_table(index_rows, [
-        "backend", "recall_at_1", "recall_at_5", "recall_at_10", "mrr_at_10",
+        "model", "backend", "recall_at_1", "recall_at_5", "recall_at_10", "mrr_at_10",
         "indexing_time_ms", "retrieval_p50_ms", "retrieval_p95_ms", "index_size_bytes",
     ]))
     return summary
