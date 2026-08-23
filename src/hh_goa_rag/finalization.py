@@ -349,6 +349,9 @@ def run_finalization(
         cleanup = _load_json(cleanup_path)
         if cleanup.get("winner") != embedding_winner["winner"]:
             raise RuntimeError("Stored model cleanup report belongs to another winner")
+        expected_candidates = sorted(config["embedding_ablation"]["models"])
+        if sorted(cleanup.get("candidates", [])) != expected_candidates:
+            raise RuntimeError("Stored model cleanup report belongs to another candidate set")
     else:
         cleanup = cleanup_losing_models(
             config["cache"]["models"],
