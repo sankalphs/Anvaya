@@ -222,14 +222,16 @@ class EmbeddingModel:
         """Work around Transformers 5 not copying nested local relative imports."""
         import transformers.dynamic_module_utils as dynamic_modules
 
+        default_cache = Path(dynamic_modules.HF_MODULES_CACHE)
         module_cache = path.parent.parent / "remote_modules"
         dynamic_modules.HF_MODULES_CACHE = str(module_cache.resolve())
         submodule = dynamic_modules._sanitize_module_name(path.name)
-        destination = module_cache / dynamic_modules.TRANSFORMERS_DYNAMIC_MODULE_NAME / submodule
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / "__init__.py").touch(exist_ok=True)
-        for source in path.glob("*.py"):
-            shutil.copy2(source, destination / source.name)
+        for cache_root in {module_cache, default_cache}:
+            destination = cache_root / dynamic_modules.TRANSFORMERS_DYNAMIC_MODULE_NAME / submodule
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "__init__.py").touch(exist_ok=True)
+            for source in path.glob("*.py"):
+                shutil.copy2(source, destination / source.name)
 
     def _encode(
         self,
