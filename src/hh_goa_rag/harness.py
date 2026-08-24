@@ -37,14 +37,14 @@ FROZEN_MAX_OUTPUT_TOKENS = 128
 WARMUP_QUERY = "यूनाइटेड किंगडम में कौन से चार देश शामिल हैं"
 WARMUP_PASSAGE = "यूनाइटेड किंगडम में इंग्लैंड, स्कॉटलैंड, वेल्स और उत्तरी आयरलैंड शामिल हैं"
 FROZEN_RETRIEVAL = {
-    "model": "intfloat/multilingual-e5-small",
+    "model": "BAAI/bge-m3",
     "chunking_strategy": "fixed_words",
     "chunk_size_words": 128,
     "index_engine": "faiss",
-    "index_type": "flat_l2",
-    "m": None,
-    "ef_construction": None,
-    "ef_search": None,
+    "index_type": "hnsw",
+    "m": 32,
+    "ef_construction": 200,
+    "ef_search": 128,
     "search_oversample": 20,
     "normalization_method": "float32_l2_v1",
     "top_k": FROZEN_TOP_K,
@@ -458,15 +458,17 @@ class VoiceRAGHarness:
 
 
 def _assert_frozen_config(config: dict[str, Any]) -> None:
+    chunking = config.get("chunking", {})
+    index = config.get("index", {})
     observed = {
         "model": config.get("model"),
-        "chunking_strategy": config.get("chunking", {}).get("strategy"),
-        "chunk_size_words": config.get("chunking", {}).get("max_words"),
-        "index_engine": config.get("index", {}).get("engine"),
-        "index_type": config.get("index", {}).get("index_type"),
-        "m": config.get("index", {}).get("m"),
-        "ef_construction": config.get("index", {}).get("ef_construction"),
-        "ef_search": config.get("index", {}).get("ef_search"),
+        "chunking_strategy": chunking.get("strategy"),
+        "chunk_size_words": chunking.get("max_words", chunking.get("size")),
+        "index_engine": index.get("engine"),
+        "index_type": index.get("index_type"),
+        "m": index.get("m"),
+        "ef_construction": index.get("ef_construction"),
+        "ef_search": index.get("ef_search"),
         "search_oversample": config.get("search_oversample"),
         "normalization_method": config.get("normalization_method"),
         "top_k": config.get("top_k"),

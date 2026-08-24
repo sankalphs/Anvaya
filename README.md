@@ -10,15 +10,15 @@ already-frozen Voice-RAG pipeline. The web layer does not reproduce or replace p
 Voice
 → Sarvam Saaras v3
 → Guardrails
-→ multilingual E5-small
-→ FAISS FlatIP2
+→ BGE-M3
+→ FAISS HNSW
 → Evidence gate
 → Groq openai/gpt-oss-20b
 → Grounding validation
 ```
 
-The selected stack uses fixed 128-word chunks, normalized multilingual E5-small embeddings,
-the exact FAISS `faiss_flat_ip2` index, and Top-10 retrieval with the
+The selected stack uses fixed 128-word chunks, normalized BGE-M3 embeddings,
+FAISS HNSW (`M=32`, `efConstruction=200`, `efSearch=128`), and Top-10 retrieval with the
 `strict_context_only` generation prompt. Answers require supporting retrieved evidence and
 valid citations; otherwise the deterministic route is `INSUFFICIENT_CONTEXT`. The deterministic routes are `ANSWER`,
 `INSUFFICIENT_CONTEXT`, `OFF_TOPIC`, `UNSAFE`, `STT_FAILURE`, and `SYSTEM_ERROR`.
@@ -60,7 +60,7 @@ The health check is `GET /health`.
 | `HH_RAG_ENV_FILE` | `.env` | Local dotenv path |
 | `HH_RAG_RETRIEVER_CONFIG` | `results/final_retriever_config.json` | Frozen artifact manifest |
 
-The service validates the key, config, E5-small cache, FAISS index, and chunk mapping before marking
+The service validates the key, config, BGE-M3 cache, FAISS HNSW index, and chunk mapping before marking
 `/health` ready. It uses one worker because the model and progress registry must not be duplicated.
 
 ## Docker
@@ -87,7 +87,7 @@ latency. Winners are selected only on development; the validation artifact is re
 final locked run.
 
 The table below preserves the original development ablation record. The current serving
-configuration is the E5-small/FlatIP2 stack described above.
+configuration is the BGE-M3/HNSW stack described above.
 
 All development ablations used 1,000 fixed queries and parent-level qrels. The sealed test was run
 once on the selected stack.
