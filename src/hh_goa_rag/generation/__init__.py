@@ -3,6 +3,13 @@
 from .gemini import GEMINI_MODEL, GeminiGeneration, GeminiGenerationConfig
 from .groq import CALLABLE_GROQ_MODELS, GROQ_MODEL, GroqGeneration, GroqGenerationConfig
 from .prompts import PROMPT_VARIANTS, build_messages
+from .qwen_gguf import (
+    QWEN_GGUF_FILENAME,
+    QWEN_GGUF_MODEL,
+    QWEN_GGUF_REPOSITORY,
+    QwenGGUFGeneration,
+    QwenGGUFGenerationConfig,
+)
 from .sarvam import (
     CALLABLE_SARVAM_MODELS,
     GenerationContext,
@@ -20,6 +27,11 @@ __all__ = [
     "GROQ_MODEL",
     "GroqGeneration",
     "GroqGenerationConfig",
+    "QWEN_GGUF_FILENAME",
+    "QWEN_GGUF_MODEL",
+    "QWEN_GGUF_REPOSITORY",
+    "QwenGGUFGeneration",
+    "QwenGGUFGenerationConfig",
     "PROMPT_VARIANTS",
     "GenerationContext",
     "GenerationResult",

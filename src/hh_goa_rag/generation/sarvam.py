@@ -49,6 +49,7 @@ class GenerationContext:
     text: str
     rank: int
     score: float | None = None
+    language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,7 @@ class SarvamGenerationConfig:
 
 @dataclass(frozen=True)
 class GenerationResult:
-    provider: Literal["sarvam", "groq"]
+    provider: Literal["sarvam", "groq", "qwen-gguf"]
     model: str
     status: Literal["ok", "error"]
     answer_status: Literal["ANSWER", "INSUFFICIENT_CONTEXT"] | None
@@ -143,8 +144,14 @@ class SarvamGeneration:
         contexts: Sequence[GenerationContext | dict[str, Any]],
         *,
         prompt_variant: PromptVariant = "structured_evidence_ids",
+        language_code: str | None = None,
     ) -> GenerationResult:
-        messages = build_messages(question, contexts, variant=prompt_variant)
+        messages = build_messages(
+            question,
+            contexts,
+            variant=prompt_variant,
+            language_code=language_code,
+        )
         allowed_ids = {str(_field(context, "parent_id")) for context in contexts}
         started = time.perf_counter_ns()
         last_error: BaseException | None = None

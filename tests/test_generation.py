@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 
+from hh_goa_rag.generation import QWEN_GGUF_MODEL
 from hh_goa_rag.generation.groq import GroqGeneration, GroqGenerationConfig
 from hh_goa_rag.generation.prompts import PROMPT_VARIANTS, build_messages
 from hh_goa_rag.generation.sarvam import (
@@ -21,6 +22,12 @@ def context() -> GenerationContext:
         text="गोवा भारत में है।",
         rank=1,
         score=0.9,
+    )
+
+
+def test_qwen_model_is_exported_for_harness_startup() -> None:
+    assert QWEN_GGUF_MODEL == (
+        "ggml-org/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q4_0.gguf"
     )
 
 
@@ -85,6 +92,19 @@ def test_all_prompt_variants_preserve_parent_and_chunk_ids(variant: str) -> None
     messages = build_messages("प्रश्न", [context()], variant=variant)  # type: ignore[arg-type]
     assert 'parent_id="p-1"' in messages[1]["content"]
     assert 'chunk_id="c-1"' in messages[1]["content"]
+
+
+def test_prompt_treats_selected_language_as_output_language() -> None:
+    messages = build_messages(
+        "Where is Goa?",
+        [context()],
+        language_code="ml-IN",
+    )
+
+    system_prompt = messages[0]["content"]
+    assert "Malayalam (മലയാളം)" in system_prompt
+    assert "hard requirement" in system_prompt
+    assert "Do not answer in English unless English is requested" in system_prompt
 
 
 def test_config_freezes_ablation_parameters() -> None:

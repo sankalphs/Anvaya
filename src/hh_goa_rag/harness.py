@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -11,10 +12,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from hh_goa_rag.generation import (
-    GROQ_MODEL,
+    QWEN_GGUF_MODEL,
     GenerationContext,
-    GroqGeneration,
-    GroqGenerationConfig,
+    QwenGGUFGeneration,
+    QwenGGUFGenerationConfig,
 )
 from hh_goa_rag.guardrails import (
     GuardrailResponse,
@@ -30,10 +31,10 @@ from hh_goa_rag.models import MODEL_SPECS, EmbeddingModel
 from hh_goa_rag.retriever import ParentFaissRetriever
 from hh_goa_rag.stt.sarvam import SarvamSTT
 
-FROZEN_GENERATION_MODEL = GROQ_MODEL
+FROZEN_GENERATION_MODEL = QWEN_GGUF_MODEL
 FROZEN_TOP_K = 10
 FROZEN_PROMPT = "strict_context_only"
-FROZEN_MAX_OUTPUT_TOKENS = 128
+FROZEN_MAX_OUTPUT_TOKENS = 48
 WARMUP_QUERY = "यूनाइटेड किंगडम में कौन से चार देश शामिल हैं"
 WARMUP_PASSAGE = "यूनाइटेड किंगडम में इंग्लैंड, स्कॉटलैंड, वेल्स और उत्तरी आयरलैंड शामिल हैं"
 FROZEN_RETRIEVAL = {
@@ -60,7 +61,14 @@ class Retriever(Protocol):
 
 
 class Generator(Protocol):
-    def generate(self, question: str, contexts: list[Any], *, prompt_variant: str) -> Any: ...
+    def generate(
+        self,
+        question: str,
+        contexts: list[Any],
+        *,
+        prompt_variant: str,
+        language_code: str | None = None,
+    ) -> Any: ...
 
 
 class VoiceRAGHarness:
@@ -74,11 +82,13 @@ class VoiceRAGHarness:
         generator: Generator,
         stt: Any | None = None,
         orchestrator: str = "native",
+        fast_extractive: bool = False,
     ) -> None:
         self.embedder = embedder
         self.retriever = retriever
         self.generator = generator
         self.stt = stt
+        self.fast_extractive = fast_extractive
         if orchestrator not in {"native", "langgraph"}:
             raise ValueError("orchestrator must be 'native' or 'langgraph'")
         self.orchestrator = orchestrator
@@ -117,12 +127,11 @@ class VoiceRAGHarness:
             top_k=FROZEN_TOP_K,
             oversample=int(config["search_oversample"]),
         )
-        generator = GroqGeneration.from_env(
-            env_path,
-            config=GroqGenerationConfig(
+        generator = QwenGGUFGeneration.from_env(
+            config=QwenGGUFGenerationConfig(
                 model=FROZEN_GENERATION_MODEL,
                 max_tokens=FROZEN_MAX_OUTPUT_TOKENS,
-            ),
+            )
         )
         stt = SarvamSTT.from_env(env_path) if include_stt else None
         orchestrator = os.getenv("HH_RAG_ORCHESTRATOR", "native").strip().lower()
@@ -134,6 +143,10 @@ class VoiceRAGHarness:
             generator=generator,
             stt=stt,
             orchestrator=orchestrator,
+            # The extractive shortcut returns source text verbatim and therefore
+            # cannot honor the selected output language. Keep it opt-in for
+            # legacy callers that do not request a language explicitly.
+            fast_extractive=_env_enabled("HH_RAG_FAST_EXTRACTIVE", default=False),
         )
 
     def handle_text(
@@ -147,7 +160,12 @@ class VoiceRAGHarness:
             transcript,
             operation_started=time.perf_counter_ns(),
             base_metadata=(
-                {"input_language": language_code} if language_code is not None else None
+                {
+                    "input_language": language_code,
+                    "requested_output_language": language_code,
+                }
+                if language_code is not None
+                else None
             ),
             on_stage=on_stage,
         )
@@ -205,7 +223,11 @@ class VoiceRAGHarness:
             _field(result, "transcript", ""),
             operation_started=operation_started,
             stages=stages,
-            base_metadata={"stt": stt_metadata, "input_language": language_code},
+            base_metadata={
+                "stt": stt_metadata,
+                "input_language": language_code,
+                "requested_output_language": language_code,
+            },
             on_stage=on_stage,
         )
 
@@ -312,7 +334,12 @@ class VoiceRAGHarness:
             vectors, _ = self.embedder.encode_queries([validation.normalized_transcript])
             stages["embedding"] = _elapsed_ms(started)
             started = time.perf_counter_ns()
-            contexts = list(self.retriever.retrieve(vectors[0]))[:FROZEN_TOP_K]
+            contexts = _retrieve_evidence(
+                self.retriever,
+                vectors[0],
+                query_text=validation.normalized_transcript,
+                language_code=metadata.get("input_language"),
+            )[:FROZEN_TOP_K]
             stages["retrieval"] = _elapsed_ms(started)
             retrieved_ids = tuple(str(_field(item, "parent_id", "")) for item in contexts)
             metadata["retrieved"] = [
@@ -359,15 +386,75 @@ class VoiceRAGHarness:
                     text=str(_field(item, "text", "")),
                     rank=index,
                     score=float(_field(item, "score", 0.0)),
+                    language=_field(item, "language", None),
                 )
                 for index, item in enumerate(contexts, start=1)
             ]
+            metadata["generation_context_ids"] = [
+                context.parent_id for context in generation_contexts[:3]
+            ]
+            # A language-selected request must reach the language-aware
+            # generator. The extractive path is only safe when no output
+            # language was requested, because it returns evidence verbatim.
+            if self.fast_extractive and not metadata.get("requested_output_language"):
+                _notify_stage(on_stage, "Generating answer")
+                started = time.perf_counter_ns()
+                extracted = _extractive_kb_answer(
+                    validation.normalized_transcript,
+                    generation_contexts,
+                    language_code=metadata.get("input_language"),
+                )
+                stages["generation"] = _elapsed_ms(started)
+                if extracted is not None:
+                    answer, parent_id = extracted
+                    _notify_stage(on_stage, "Validating grounding")
+                    started = time.perf_counter_ns()
+                    grounding_valid = any(
+                        context.parent_id == parent_id and answer in context.text
+                        for context in generation_contexts
+                    )
+                    stages["grounding_validation"] = _elapsed_ms(started)
+                    metadata["generation"] = {
+                        "provider": "deterministic",
+                        "model": "unicode-trigram-extractive-v1",
+                        "provider_status": "ok",
+                        "answer_status": "ANSWER",
+                        "latency_ms": stages["generation"],
+                        "answer_mode": "extractive_fast_path",
+                    }
+                    metadata["grounding"] = {
+                        "valid": grounding_valid,
+                        "route": Route.ANSWER.value,
+                        "reason_code": ReasonCode.ANSWER_GROUNDED.value,
+                    }
+                    decision_trace.append(
+                        {
+                            "stage": "grounding_validation",
+                            "allow": grounding_valid,
+                            "route": Route.ANSWER.value,
+                            "reason_code": ReasonCode.ANSWER_GROUNDED.value,
+                        }
+                    )
+                    if grounding_valid:
+                        return _response(
+                            Route.ANSWER,
+                            ReasonCode.ANSWER_GROUNDED,
+                            stages,
+                            operation_started,
+                            transcript=validation.normalized_transcript,
+                            answer=answer,
+                            retrieved_ids=retrieved_ids,
+                            citations=(parent_id,),
+                            metadata=metadata,
+                        )
             _notify_stage(on_stage, "Generating answer")
             started = time.perf_counter_ns()
-            generated = self.generator.generate(
+            generated = _generate_answer(
+                self.generator,
                 validation.normalized_transcript,
                 generation_contexts,
                 prompt_variant=FROZEN_PROMPT,
+                language_code=metadata.get("requested_output_language"),
             )
             stages["generation"] = _elapsed_ms(started)
             _notify_stage(on_stage, "Validating grounding")
@@ -375,7 +462,7 @@ class VoiceRAGHarness:
             grounding = validate_generation(generated, generation_contexts)
             stages["grounding_validation"] = _elapsed_ms(started)
             metadata["generation"] = {
-                "provider": _field(generated, "provider", "groq"),
+                "provider": _field(generated, "provider", "qwen-gguf"),
                 "model": _field(generated, "model", FROZEN_GENERATION_MODEL),
                 "provider_status": _field(generated, "status", "error"),
                 "answer_status": _field(generated, "answer_status", None),
@@ -388,7 +475,15 @@ class VoiceRAGHarness:
                 "output_tokens": _field(generated, "output_tokens", None),
                 "tokens_per_second": _field(generated, "tokens_per_second", None),
                 "provider_latency_ms": _field(generated, "provider_latency_ms", None),
+                "diagnostics": _field(generated, "diagnostics", {}),
             }
+            metadata["latency_checkpoints"] = metadata["generation"].get(
+                "diagnostics", {}
+            ).get("checkpoints", {})
+            metadata["generation"]["runtime"] = metadata["latency_checkpoints"].get(
+                "qwen_runtime"
+            )
+            metadata["generation"]["answer_mode"] = "model_generated"
             metadata["grounding"] = {
                 "valid": grounding.valid,
                 "route": grounding.route.value,
@@ -406,11 +501,15 @@ class VoiceRAGHarness:
                 not grounding.valid
                 and grounding.reason_code != ReasonCode.MODEL_INSUFFICIENT_CONTEXT
             ):
-                fallback = _extractive_kb_fallback(generation_contexts)
+                fallback = _extractive_kb_fallback(
+                    generation_contexts,
+                    language_code=metadata.get("requested_output_language"),
+                )
                 if fallback is not None:
                     fallback_answer, fallback_parent_id = fallback
                     metadata["generation"]["fallback"] = "extractive_kb"
                     metadata["generation"]["fallback_reason"] = grounding.reason_code.value
+                    metadata["generation"]["answer_mode"] = "extractive_fallback"
                     metadata["grounding"] = {
                         "valid": True,
                         "route": Route.ANSWER.value,
@@ -528,16 +627,72 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
     return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
 
 
+def _generate_answer(
+    generator: Generator,
+    question: str,
+    contexts: list[GenerationContext],
+    *,
+    prompt_variant: str,
+    language_code: str | None,
+) -> Any:
+    """Call generators with the requested language while keeping test doubles compatible."""
+
+    generate = generator.generate
+    kwargs: dict[str, Any] = {"prompt_variant": prompt_variant}
+    try:
+        parameters = inspect.signature(generate).parameters.values()
+    except (TypeError, ValueError):
+        parameters = ()
+    if language_code is not None and (
+        any(parameter.name == "language_code" for parameter in parameters)
+        or any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters)
+    ):
+        kwargs["language_code"] = language_code
+    return generate(question, contexts, **kwargs)
+
+
+def _retrieve_evidence(
+    retriever: Retriever,
+    query_embedding: Any,
+    *,
+    query_text: str,
+    language_code: str | None,
+) -> list[Any]:
+    """Pass optional hybrid-retrieval inputs without breaking simple test doubles."""
+
+    retrieve = retriever.retrieve
+    kwargs: dict[str, Any] = {}
+    try:
+        parameters = inspect.signature(retrieve).parameters.values()
+    except (TypeError, ValueError):
+        parameters = ()
+    names = {parameter.name for parameter in parameters}
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters
+    )
+    if "query_text" in names or accepts_kwargs:
+        kwargs["query_text"] = query_text
+    if language_code is not None and ("language_code" in names or accepts_kwargs):
+        kwargs["language_code"] = language_code
+    return list(retrieve(query_embedding, **kwargs))
+
+
 def _extractive_kb_fallback(
     contexts: list[GenerationContext],
+    *,
+    language_code: str | None = None,
 ) -> tuple[str, str] | None:
     """Return a bounded verbatim KB sentence when the model output is unusable.
 
     This is deliberately extractive: it cannot introduce model knowledge, and it
-    is only reachable after retrieval sufficiency has already passed.
+    is only reachable after retrieval sufficiency has already passed. When the user
+    selected an output language, never fall back to evidence from another language.
     """
 
+    requested_language = _language_key(language_code)
     for context in contexts[:3]:
+        if requested_language and context.language != requested_language:
+            continue
         text = str(context.text).strip()
         if not text:
             continue
@@ -546,6 +701,59 @@ def _extractive_kb_fallback(
         if answer:
             return answer[:500], context.parent_id
     return None
+
+
+def _extractive_kb_answer(
+    question: str,
+    contexts: list[GenerationContext],
+    *,
+    language_code: str | None = None,
+) -> tuple[str, str] | None:
+    """Select the most query-aligned verbatim sentence from the top evidence."""
+
+    query_terms = " ".join(re.findall(r"\w+", question.casefold(), flags=re.UNICODE))
+    query_trigrams = {
+        query_terms[index : index + 3]
+        for index in range(max(0, len(query_terms) - 2))
+        if query_terms[index : index + 3].strip()
+    }
+    requested_language = _language_key(language_code)
+    best: tuple[float, int, str, str] | None = None
+    for context_index, context in enumerate(contexts[:3]):
+        if requested_language and context.language != requested_language:
+            continue
+        sentences = re.split(r"(?<=[.!?।॥])\s+", str(context.text).strip())
+        for sentence in sentences:
+            answer = sentence.strip()
+            if not answer:
+                continue
+            normalized = " ".join(
+                re.findall(r"\w+", answer.casefold(), flags=re.UNICODE)
+            )
+            overlap = (
+                sum(trigram in normalized for trigram in query_trigrams)
+                / len(query_trigrams)
+                if query_trigrams
+                else 0.0
+            )
+            candidate = (overlap, -context_index, answer[:500], context.parent_id)
+            if best is None or candidate[:2] > best[:2]:
+                best = candidate
+    return (best[2], best[3]) if best is not None else None
+
+
+def _env_enabled(name: str, *, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _language_key(language_code: str | None) -> str | None:
+    if not language_code:
+        return None
+    key = language_code.split("-", 1)[0].strip().lower()
+    return {"od": "or"}.get(key, key) or None
 
 
 def _elapsed_ms(started: int) -> float:

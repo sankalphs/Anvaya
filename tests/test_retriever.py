@@ -73,3 +73,36 @@ def test_retriever_prefers_substantive_chunk_for_parent(tmp_path: Path) -> None:
     )
 
     assert result[0].chunk_id == "body"
+
+
+def test_retriever_uses_exact_language_partition_when_available(tmp_path: Path) -> None:
+    index = faiss.IndexHNSWFlat(2, 4, faiss.METRIC_INNER_PRODUCT)
+    index.add(np.asarray([[1.0, 0.0], [0.9, 0.43589]], dtype=np.float32))
+    index_path = tmp_path / "language.faiss"
+    faiss.write_index(index, str(index_path))
+    chunk_path = tmp_path / "language-chunks.jsonl"
+    write_jsonl(
+        chunk_path,
+        [
+            {
+                "chunk_id": "english",
+                "parent_id": "p-en",
+                "text": "the globally closest passage",
+                "language": "en",
+            },
+            {
+                "chunk_id": "hindi",
+                "parent_id": "p-hi",
+                "text": "सही हिन्दी साक्ष्य",
+                "language": "hi",
+            },
+        ],
+    )
+
+    result = ParentFaissRetriever.load(index_path, chunk_path, top_k=1).retrieve(
+        np.asarray([1.0, 0.0], dtype=np.float32),
+        query_text="सही प्रश्न",
+        language_code="hi-IN",
+    )
+
+    assert [item.parent_id for item in result] == ["p-hi"]

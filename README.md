@@ -13,7 +13,7 @@ Voice
 → BGE-M3
 → FAISS HNSW
 → Evidence gate
-→ Groq openai/gpt-oss-20b
+→ Qwen3.5 0.8B Q4_0 GGUF in ZeroGPU
 → Grounding validation
 ```
 
@@ -40,12 +40,13 @@ for the complete runtime and trust boundaries.
 ## Run locally
 
 Prerequisites: Python 3.11–3.14, the frozen local artifacts referenced by
-`results/final_retriever_config.json`, Sarvam credentials for STT, and a Groq API key for answer generation.
+`results/final_retriever_config.json`, and Sarvam credentials for STT. Answer generation uses the
+Qwen3.5 0.8B Q4_0 GGUF in the hosted ZeroGPU Space.
 
 ```powershell
 python -m pip install -e ".[app,web]"
 Copy-Item .env.example .env
-# Edit .env and set SARVAM_API_KEY and GROQ_API_KEY. Never commit this file.
+# Edit .env and set SARVAM_API_KEY. Never commit this file.
 python -m uvicorn hh_goa_rag.web:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
@@ -55,7 +56,7 @@ The health check is `GET /health`.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SARVAM_API_KEY` | required | Sarvam STT authentication |
-| `GROQ_API_KEY` | required | Groq answer-generation authentication (`openai/gpt-oss-20b`) |
+| `QWEN_GGUF_PATH` | Space-managed | Local path to the downloaded Qwen3.5 Q4_0 GGUF |
 | `HH_RAG_DEVICE` | `auto` | `auto`, `cpu`, or a CUDA device |
 | `HH_RAG_ENV_FILE` | `.env` | Local dotenv path |
 | `HH_RAG_RETRIEVER_CONFIG` | `results/final_retriever_config.json` | Frozen artifact manifest |

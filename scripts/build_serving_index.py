@@ -60,7 +60,7 @@ def main() -> None:
         {
             "class": "hh_goa_rag.retriever.ParentFaissRetriever",
             "model": FROZEN_RETRIEVAL["model"],
-            "model_revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+            "model_revision": "5617a9f61b028005a4858fdac845db406aefb181",
             "model_cache_path": str(MODEL_CACHE),
             "chunk_artifact": str(CHUNK_PATH),
             "index_artifact": str(INDEX_PATH),
@@ -79,6 +79,13 @@ def main() -> None:
             },
             "normalization_method": "float32_l2_v1",
             "search_oversample": 20,
+            "language_partitioned": True,
+            "hybrid_reranker": {
+                "type": "unicode_char_trigram_overlap",
+                "candidate_parents": 200,
+                "dense_weight": 0.4,
+                "lexical_weight": 0.6,
+            },
             "top_k": FROZEN_TOP_K,
             "serving_corpus": "dev_plus_test",
             "corpus_chunks": len(chunks),
