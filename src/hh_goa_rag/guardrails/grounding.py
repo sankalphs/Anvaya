@@ -109,12 +109,28 @@ def _answer_overlaps_evidence(answer: str, evidence: str, *, minimum: float = 0.
     This is intentionally a conservative lexical gate. It is not a substitute for
     human/entailment evaluation, but it prevents a valid citation ID from acting as
     a blanket approval for an unrelated answer.
+
+    When the answer and its evidence are written in different scripts - an
+    English paraphrase grounded on Hindi evidence, say - lexical overlap is
+    meaningless (only transliterated names survive). In that cross-lingual
+    case the gate switches to number conservation: every figure in the answer
+    must exist in the cited evidence, which is language-independent and still
+    catches fabricated statistics while allowing faithful translation.
     """
+    answer_script = _dominant_script(answer)
+    evidence_script = _dominant_script(evidence)
+    cross_lingual = (
+        answer_script != "none"
+        and evidence_script != "none"
+        and answer_script != evidence_script
+    )
+    if cross_lingual:
+        return not _introduces_novel_numbers(answer, evidence)
+
     def tokens(value: str) -> set[str]:
-        normalized = unicodedata.normalize("NFKC", value).casefold()
         return {
             token
-            for token in _TOKEN_RE.findall(normalized)
+            for token in _lexical_tokens(value)
             if token not in _GROUNDING_STOPWORDS
         }
 
@@ -124,6 +140,77 @@ def _answer_overlaps_evidence(answer: str, evidence: str, *, minimum: float = 0.
         return False
     overlap = len(answer_tokens & evidence_tokens) / len(answer_tokens)
     return overlap >= minimum
+
+
+# Coarse Unicode-block buckets: enough to tell "answer script differs from
+# evidence script" without full language identification.
+_SCRIPT_RANGES: tuple[tuple[int, int, str], ...] = (
+    (0x0900, 0x097F, "indic"),
+    (0x0980, 0x09FF, "indic"),
+    (0x0A00, 0x0A7F, "indic"),
+    (0x0A80, 0x0AFF, "indic"),
+    (0x0B00, 0x0B7F, "indic"),
+    (0x0B80, 0x0BFF, "indic"),
+    (0x0C00, 0x0C7F, "indic"),
+    (0x0C80, 0x0CFF, "indic"),
+    (0x0D00, 0x0D7F, "indic"),
+    (0x0600, 0x06FF, "arabic"),
+    (0x0750, 0x077F, "arabic"),
+)
+
+
+def _dominant_script(text: str) -> str:
+    counts: dict[str, int] = {"latin": 0, "indic": 0, "arabic": 0}
+    for character in text:
+        code = ord(character)
+        for low, high, name in _SCRIPT_RANGES:
+            if low <= code <= high:
+                counts[name] += 1
+                break
+        else:
+            if character.isascii() and character.isalpha():
+                counts["latin"] += 1
+    dominant = max(counts, key=lambda name: counts[name])
+    return dominant if counts[dominant] > 0 else "none"
+
+
+_NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)?")
+_DIGIT_TRANSLATION = str.maketrans("०१२३४५६७८٩٠١٢٣٤٥٦٧٨", "0123456789012345678")
+
+
+def _lexical_tokens(value: str) -> set[str]:
+    """Word tokens that keep Indic vowel signs attached.
+
+    ``\\w`` excludes combining marks (Mn), which silently shatters Devanagari
+    words into consonant fragments; tokenize on alnum-or-mark runs instead.
+    """
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    tokens: set[str] = set()
+    buffer: list[str] = []
+    for character in normalized:
+        if character.isalnum() or unicodedata.category(character).startswith("M"):
+            buffer.append(character)
+        elif buffer:
+            tokens.add("".join(buffer))
+            buffer = []
+    if buffer:
+        tokens.add("".join(buffer))
+    return tokens
+
+
+def _introduces_novel_numbers(answer: str, evidence: str) -> bool:
+    """True when the answer states figures absent from the cited evidence."""
+    normalized_answer = unicodedata.normalize("NFKC", answer).translate(_DIGIT_TRANSLATION)
+    normalized_evidence = unicodedata.normalize("NFKC", evidence).translate(_DIGIT_TRANSLATION)
+    evidence_numbers = {
+        number.rstrip(".,")
+        for number in _NUMBER_PATTERN.findall(normalized_evidence)
+    }
+    answer_numbers = {
+        number.rstrip(".,")
+        for number in _NUMBER_PATTERN.findall(normalized_answer)
+    }
+    return bool(answer_numbers - evidence_numbers)
 
 
 def _parse_raw(raw_output: str) -> dict[str, Any] | None:

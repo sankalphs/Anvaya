@@ -58,6 +58,7 @@ class ExtractiveQAEngine:
         self.model_name = model_name
         self.device = torch.device(device)
         self.max_length = max_length
+        self.max_question_tokens = max(1, max_length // 2)
         self.max_answer_tokens = max_answer_tokens
         self.confidence_threshold = confidence_threshold
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
@@ -86,6 +87,15 @@ class ExtractiveQAEngine:
         if not contexts:
             return LocalAnswer("INSUFFICIENT_CONTEXT", "", (), 0.0, 0.0)
         started = time.perf_counter_ns()
+        # `truncation="only_second"` raises when the question alone fills the
+        # window, which previously surfaced as a fast-tier exception and a
+        # silent abstention. Cap the question so context truncation always
+        # has room.
+        question_ids = self.tokenizer(question, add_special_tokens=False)["input_ids"]
+        if len(question_ids) > self.max_question_tokens:
+            question = self.tokenizer.decode(
+                question_ids[: self.max_question_tokens], skip_special_tokens=True
+            ).strip()
         encoded = self.tokenizer(
             [question] * len(contexts),
             [context.text for context in contexts],

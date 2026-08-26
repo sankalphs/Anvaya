@@ -25,6 +25,10 @@ TOP_TO_FIFTH_MIN_SPREAD = 0.12
 QUERY_CORROBORATION_FLOOR = 0.50
 QUERY_CORROBORATION_MEAN_FLOOR = 0.50
 QUERY_CORROBORATION_CONTEXTS = 2
+# Above this dense-similarity floor the evidence is plausible enough that the
+# grounded generator - which can still answer INSUFFICIENT_CONTEXT under the
+# exact output schema - should judge sufficiency instead of refusing here.
+BORDERLINE_REVIEW_FLOOR = 0.45
 _QUERY_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 _QUERY_STOPWORDS = {
     "a",
@@ -90,14 +94,13 @@ def evidence_sufficiency(
     contexts: Sequence[Any],
     *,
     query: str | None = None,
+    language_code: str | None = None,
     top_score_threshold: float = TOP_SCORE_THRESHOLD,
 ) -> RetrievalSignals:
     # Hybrid retrieval order is not necessarily descending by dense score.
     # Keep the development-selected semantic thresholds on their original
     # signal distribution by computing them from sorted dense similarities.
-    scores = sorted(
-        (float(_field(context, "score")) for context in contexts), reverse=True
-    )
+    scores = sorted((float(_field(context, "score")) for context in contexts), reverse=True)
     if not scores:
         return RetrievalSignals(False, ReasonCode.RETRIEVAL_EMPTY, None, None, None, None, "empty")
     top = scores[0]
@@ -105,7 +108,32 @@ def evidence_sufficiency(
     spread = top - scores[4] if len(scores) >= 5 else None
     mean3 = sum(scores[:3]) / min(3, len(scores))
     overlap_count = _query_overlap_count(query, contexts) if query is not None else 0
+    requested_language = _language_key(language_code)
+    if requested_language and requested_language != "hi":
+        # The frozen 0.67 threshold was selected on the original Hindi demo
+        # distribution. Dense similarities are not calibrated across scripts,
+        # so applying that number to another requested language creates false
+        # refusals before the multilingual generator can assess the evidence.
+        return RetrievalSignals(
+            True,
+            None,
+            top,
+            gap,
+            spread,
+            mean3,
+            "multilingual_generation_review",
+        )
     if query is not None and overlap_count == 0:
+        if top >= BORDERLINE_REVIEW_FLOOR:
+            return RetrievalSignals(
+                True,
+                None,
+                top,
+                gap,
+                spread,
+                mean3,
+                "borderline_generation_review",
+            )
         return RetrievalSignals(
             False,
             ReasonCode.RETRIEVAL_LOW_CONFIDENCE,
@@ -134,6 +162,16 @@ def evidence_sufficiency(
     )
     if multilingual_corroborated:
         return RetrievalSignals(True, None, top, gap, spread, mean3, "query_term_corroboration")
+    if top >= BORDERLINE_REVIEW_FLOOR:
+        return RetrievalSignals(
+            True,
+            None,
+            top,
+            gap,
+            spread,
+            mean3,
+            "borderline_generation_review",
+        )
     return RetrievalSignals(
         False,
         ReasonCode.RETRIEVAL_LOW_CONFIDENCE,
@@ -220,3 +258,13 @@ def _phonetic_skeleton(value: str) -> str:
         for character in unicodedata.normalize("NFKC", value).casefold()
         if character.isalpha() and character not in "aeiouy"
     )
+
+
+def language_key(language_code: str | None) -> str | None:
+    if not language_code:
+        return None
+    key = language_code.split("-", 1)[0].strip().lower()
+    return {"od": "or"}.get(key, key) or None
+
+
+_language_key = language_key

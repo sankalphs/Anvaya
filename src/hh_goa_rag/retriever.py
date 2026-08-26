@@ -25,6 +25,15 @@ class RetrievedParent:
 
 
 _LANGUAGE_ALIASES = {"od": "or"}
+# UI languages without their own MSMARCO-XI content pivot to the
+# linguistically closest available partition instead of searching every
+# script in the corpus and surfacing random-language passages.
+_LANGUAGE_PIVOTS = {
+    "kok": ("mr", "hi"),
+    "ks": ("ur", "hi"),
+    "sd": ("ur", "hi"),
+    "mai": ("hi",),
+}
 _DENSE_WEIGHT = 0.40
 _LEXICAL_WEIGHT = 1.0 - _DENSE_WEIGHT
 _RAW_CHUNK_MULTIPLIER = 5
@@ -77,6 +86,18 @@ class ParentFaissRetriever:
         query = l2_normalize(query)
         language = _language_key(language_code)
         language_index = self._language_indexes.get(language) if language else None
+        pivot_note: str | None = None
+        if language_index is None and language:
+            # UI languages without corpus coverage (Konkani, Kashmiri, Sindhi)
+            # pivot to their linguistically closest available partition instead
+            # of searching the full multilingual index and surfacing random
+            # scripts. The pivot is recorded so responses can disclose it.
+            for pivot in _LANGUAGE_PIVOTS.get(language, ()):  # ordered preference
+                candidate = self._language_indexes.get(pivot)
+                if candidate is not None:
+                    language_index = candidate
+                    pivot_note = f"{language}->{pivot}"
+                    break
         active_index: faiss.Index = self.index
         source_positions: np.ndarray | None = None
         if language_index is not None:

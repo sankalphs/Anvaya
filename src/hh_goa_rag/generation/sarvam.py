@@ -160,6 +160,14 @@ class SarvamGeneration:
                 observation = self._request(messages)
                 parsed, diagnostics = _parse_answer(observation["content"], allowed_ids)
                 if parsed is None:
+                    # A truncated JSON payload (finish_reason="length") is a
+                    # transient decode artifact, not a policy failure: retry
+                    # within the attempt budget before failing the tier.
+                    parse_failure = (observation, diagnostics)
+                    last_error = RuntimeError(str(diagnostics.get("parse_error", "invalid JSON")))
+                    if attempt < self.config.max_attempts:
+                        self._sleep(self._backoff(attempt))
+                        continue
                     return self._error_result(
                         started,
                         attempt,

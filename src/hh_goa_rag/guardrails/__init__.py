@@ -2,7 +2,7 @@
 
 from .grounding import GroundingDecision, validate_generation
 from .input import InputDecision, route_input, validate_transcript
-from .retrieval import RetrievalSignals, evidence_sufficiency
+from .retrieval import RetrievalSignals, evidence_sufficiency, language_key
 from .types import GuardrailResponse, ReasonCode, Route
 
 __all__ = [
@@ -13,6 +13,7 @@ __all__ = [
     "RetrievalSignals",
     "Route",
     "evidence_sufficiency",
+    "language_key",
     "route_input",
     "validate_generation",
     "validate_transcript",
