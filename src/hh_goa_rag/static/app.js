@@ -40,6 +40,11 @@ const elements = {
   answerLabel: document.querySelector("#answer-label"),
   answerVisibilityLabel: document.querySelector("#answer-visibility-label"),
   answer: document.querySelector("#answer"),
+  listenRow: document.querySelector("#listen-row"),
+  listenButton: document.querySelector("#listen-button"),
+  listenLabel: document.querySelector("#listen-label"),
+  listenNote: document.querySelector("#listen-note"),
+  inputNoteText: document.querySelector(".input-note > span:last-child"),
   reasonCode: document.querySelector("#reason-code"),
   evidenceBlock: document.querySelector("#evidence-block"),
   evidenceTitle: document.querySelector("#evidence-title"),
@@ -65,6 +70,12 @@ const recording = {
 
 let progressRequestId = null;
 let lastQueryKind = "voice";
+// Gnani Timbre read-aloud is optional: /health reports whether the server has TTS configured.
+let ttsAvailable = false;
+let ttsAudio = null;
+let ttsObjectUrl = null;
+let lastSpokenText = "";
+let lastAnswerLanguage = "hi-IN";
 
 elements.recordButton.addEventListener("click", startRecording);
 elements.stopButton.addEventListener("click", () => stopRecording(true));
@@ -74,6 +85,7 @@ elements.textModeButton.addEventListener("click", () => setInputMode("text"));
 elements.textQuery.addEventListener("input", updateTextCount);
 elements.textSubmitButton.addEventListener("click", submitText);
 elements.newQueryButton.addEventListener("click", resetForNewQuery);
+elements.listenButton.addEventListener("click", speakAnswer);
 window.addEventListener("pagehide", releaseMicrophone);
 
 updateTextCount();
@@ -103,6 +115,16 @@ async function checkHealth() {
     if (!response.ok) throw new Error("unavailable");
     elements.healthChip.classList.add("ready");
     elements.healthText.textContent = "System ready";
+    try {
+      const health = await response.json();
+      ttsAvailable = Boolean(health && health.tts_available);
+    } catch (_parseError) {
+      ttsAvailable = false;
+    }
+    if (ttsAvailable && elements.inputNoteText) {
+      elements.inputNoteText.innerHTML =
+        "<strong>Clear input boundary.</strong> One normalized audio clip is sent per question. Answers can be read aloud on request.";
+    }
   } catch (_error) {
     elements.healthChip.classList.add("error");
     elements.healthText.textContent = "System unavailable";
@@ -386,23 +408,84 @@ function renderResult(data) {
     if (data.route === "SYSTEM_ERROR" || data.route === "STT_FAILURE") {
       elements.routeBadge.classList.add("error");
     }
-    elements.latency.textContent = `${formatMs(data.total_latency_ms)} measured request latency`;
+    const budget = (data.metadata && data.metadata.latency_budget) || null;
+    let latencyText = `${formatMs(data.total_latency_ms)} measured request latency`;
+    if (budget && budget.met === false) {
+      latencyText += ` · ⏱ exceeded the ${Math.round(budget.target_ms)} ms target by ${formatMs(budget.over_by_ms)}`;
+    }
+    elements.latency.textContent = latencyText;
     elements.queryKind.textContent = `${lastQueryKind === "text" ? "Text" : "Voice"} input · final route`;
     elements.transcript.textContent = data.transcript || "No transcript was produced.";
     elements.answerLabel.textContent = data.route === "ANSWER" ? "Answer" : "Response";
-    elements.answerVisibilityLabel.textContent = data.route === "ANSWER"
-      ? "Generated from cited evidence"
-      : "No answer generated · retrieval evidence shown";
+    const genInfo = (data.metadata && data.metadata.generation) || {};
+    if (data.route === "ANSWER" && budget && budget.met === false) {
+      // Coverage-first honesty: say plainly why this answer cost more time.
+      const providerNames = {
+        sarvam: "the Sarvam-105B generator",
+        groq: "the Groq gpt-oss-20b generator",
+        "qwen-gguf": "the resident local GGUF model",
+      };
+      const who =
+        providerNames[genInfo.provider] ||
+        (genInfo.provider ? String(genInfo.provider) : "a fallback generator");
+      const genLatency = Math.round(genInfo.latency_ms || 0);
+      elements.answerVisibilityLabel.textContent =
+        `Over-budget grounded answer · the instant extractive pass found no confident verbatim span, so ${who} generated this (~${genLatency} ms). Slower, still fully cited.`;
+    } else {
+      elements.answerVisibilityLabel.textContent = data.route === "ANSWER"
+        ? "Generated from cited evidence"
+        : data.reason_code === "DEADLINE_BUDGET_EXHAUSTED"
+          ? "Latency-budget refusal · retrieved evidence shown"
+          : "No answer generated · retrieval evidence shown";
+    }
     elements.answer.textContent = responseText(data);
+    prepareListen(data);
     elements.reasonCode.textContent = `Reason code · ${data.reason_code || "NONE"}`;
     renderEvidence(data);
     renderTechnicalDetails(data);
-    elements.resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   }, 120);
 }
 
 function responseText(data) {
   if (data.route === "ANSWER") return data.answer || "A grounded answer was not returned.";
+  // Every post-retrieval refusal pairs an honest explanation with the single
+  // closest retrieved passage, so users always leave with something useful.
+  const explanation = baseReasonLine(data);
+  const skipClosest = ["OFF_TOPIC", "UNSAFE", "STT_FAILURE"].includes(data.route);
+  const retrievedList = (data.metadata && data.metadata.retrieved) || [];
+  if (!skipClosest && retrievedList.length > 0) {
+    const top = retrievedList[0];
+    const score = typeof top.score === "number" ? ` · match strength ${top.score.toFixed(2)}` : "";
+    const passage = String(top.text || "").trim();
+    const trimmed = passage.length > 420 ? `${passage.slice(0, 420)}…` : passage;
+    return `${explanation}\n\nClosest passage in the knowledge base${score}:\n"${trimmed}"`;
+  }
+  return explanation;
+}
+
+function baseReasonLine(data) {
+  const reason = data.reason_code || "";
+  const timings = data.stage_latencies_ms || {};
+  const spentMs = Math.round(data.total_latency_ms || 0);
+  if (reason === "DEADLINE_BUDGET_EXHAUSTED") {
+    const embedMs = Math.round(timings.query_embedding ?? timings.embedding ?? 0);
+    const searchMs = Math.round(timings.vector_search ?? timings.retrieval ?? 0);
+    const spentPart =
+      embedMs || searchMs
+        ? `locating them took ${embedMs} ms embedding + ${searchMs} ms search (${spentMs} ms of the strict 200 ms budget in total)`
+        : `${spentMs} ms were spent inside the request`;
+    return `Relevant passages were found - ${spentPart} - but no confident verbatim answer could be extracted from them, so I show the closest passages rather than guess.`;
+  }
+  if (reason === "RETRIEVAL_LOW_CONFIDENCE") {
+    const decision = (data.metadata && data.metadata.evidence_decision) || {};
+    const topScore = typeof decision.top_score === "number" ? decision.top_score.toFixed(2) : null;
+    return topScore
+      ? `The strongest match scores only ${topScore} similarity against this question (a confident answer needs roughly 0.67+), so I decline rather than guess. Nothing closer exists in the corpus.`
+      : "Nothing in the knowledge base matches this question strongly enough to answer reliably, so I decline rather than guess.";
+  }
+  if (reason === "MODEL_INSUFFICIENT_CONTEXT") {
+    return "Passages were retrieved, but none contains an extractable answer span for this question.";
+  }
   const friendly = {
     INSUFFICIENT_CONTEXT:
       "I could not find enough evidence in the provided knowledge base to answer reliably.",
@@ -533,7 +616,83 @@ function setModeDisabled(disabled) {
   elements.textModeButton.disabled = disabled;
 }
 
+function prepareListen(data) {
+  stopSpeech();
+  // Citation markers such as [p-12] are shown on screen but not spoken.
+  lastSpokenText = data.route === "ANSWER"
+    ? (data.answer || "").replace(/\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 1000)
+    : "";
+  lastAnswerLanguage = elements.languageSelect.value || "hi-IN";
+  elements.listenRow.hidden = !(ttsAvailable && lastSpokenText);
+  elements.listenButton.disabled = false;
+  elements.listenLabel.textContent = "Listen";
+  elements.listenNote.textContent = "Read aloud by Gnani Timbre";
+}
+
+async function speakAnswer() {
+  if (ttsAudio && !ttsAudio.paused) {
+    stopSpeech();
+    return;
+  }
+  if (!lastSpokenText) return;
+  elements.listenButton.disabled = true;
+  elements.listenLabel.textContent = "Preparing audio…";
+  try {
+    const response = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: lastSpokenText, language_code: lastAnswerLanguage }),
+    });
+    if (!response.ok) {
+      let code = "";
+      try {
+        code = (await response.json()).error_code || "";
+      } catch (_error) {
+        code = "";
+      }
+      throw new UserFacingError(
+        code === "unsupported_language"
+          ? "Read-aloud is not available for this language yet."
+          : "The answer could not be read aloud right now.",
+      );
+    }
+    const latency = response.headers.get("X-TTS-Latency-Ms");
+    const blob = await response.blob();
+    stopSpeech();
+    ttsObjectUrl = URL.createObjectURL(blob);
+    ttsAudio = new Audio(ttsObjectUrl);
+    ttsAudio.addEventListener("ended", () => {
+      elements.listenLabel.textContent = "Listen again";
+    });
+    await ttsAudio.play();
+    elements.listenLabel.textContent = "Stop";
+    if (latency) {
+      elements.listenNote.textContent = `Read aloud by Gnani Timbre · ${formatMs(Number(latency))} synthesis`;
+    }
+  } catch (error) {
+    elements.listenLabel.textContent = "Listen";
+    elements.listenNote.textContent =
+      error instanceof UserFacingError ? error.message : "The answer could not be read aloud right now.";
+  } finally {
+    elements.listenButton.disabled = false;
+  }
+}
+
+function stopSpeech() {
+  if (ttsAudio) {
+    ttsAudio.pause();
+    ttsAudio = null;
+  }
+  if (ttsObjectUrl) {
+    URL.revokeObjectURL(ttsObjectUrl);
+    ttsObjectUrl = null;
+  }
+  if (elements.listenLabel && lastSpokenText) elements.listenLabel.textContent = "Listen";
+}
+
 function resetForNewQuery() {
+  stopSpeech();
+  elements.listenRow.hidden = true;
   elements.resultPanel.hidden = true;
   elements.progressPanel.hidden = true;
   clearAlert();
