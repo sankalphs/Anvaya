@@ -7,6 +7,7 @@ __pycache__/
 .env
 !.env.example
 eval/audio/*.wav
+results/*.wav
 !eval/audio/.gitkeep
 
 # Reproducible generated artifacts (never commit large data/model caches)
@@ -25,6 +26,7 @@ results/runs/
 !results/index_winner.json
 !results/final_test.json
 !results/final_retriever_config.json
+!results/latency_report.json
 !results/model_cleanup.json
 !results/final_recommendation.md
 !results/evaluation_baseline.md
@@ -50,3 +52,5 @@ results/runs/
 !results/generation_latency_ablation.csv
 !results/fast_path_ablation.csv
 !results/latency_optimization_summary.md
+output/
+.playwright-cli/
