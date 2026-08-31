@@ -1,8 +1,144 @@
-# Anvaya — HH Goa Voice-RAG
+# Anvaya
 
-Anvaya is a grounded multilingual voice assistant built for the HH Goa submission. It records or
-accepts audio in the browser, converts it to 16 kHz mono PCM16 WAV, and passes it through the
-already-frozen Voice-RAG pipeline. The web layer does not reproduce or replace pipeline logic.
+Anvaya keeps the original HTML/CSS/JS interface and runs the existing FastAPI
+voice/text workflow inside a Gradio Space. The pinned BGE-M3 model downloads
+on first startup; the serving FAISS index (HNSW, 22,413 chunks — 15 language
+partitions including an English partition built from the original MS MARCO
+passages) and passages are included in the repository.
+
+Set `GNANI_API_KEY` as a Space secret for voice input (Gnani Prisma STT) and spoken
+answers (Gnani Timbre TTS). `SARVAM_API_KEY` is optional and acts as the STT fallback;
+with only `SARVAM_API_KEY` set the Space behaves exactly as before (Sarvam STT, no
+read-aloud).
+
+## Gnani speech (Prisma STT + Timbre TTS)
+
+Speech runs on Gnani's official Python SDK,
+[`gnani-vachana`](https://pypi.org/project/gnani-vachana/) (pinned `>=0.8.1,<0.9`).
+
+| Stage | SDK call | Code |
+| --- | --- | --- |
+| Speech-to-text (Prisma v2.5, REST) | `gnani.stt.GnaniSTTClient(api_key=...).transcribe(path, language_code=..., format="verbatim")` | `src/hh_goa_rag/stt/gnani.py` |
+| Text-to-speech (Timbre, REST) | `gnani.tts.GnaniTTSClient(api_key=...).synthesize(text, voice=..., model="timbre-v2.5", language=..., speed=..., audio_config=AudioConfig(...))` | `src/hh_goa_rag/tts/gnani.py` |
+
+Setup:
+
+1. Create an API key at <https://app.gnani.ai/voice>.
+2. `cp .env.example .env` and set `GNANI_API_KEY=...` (or add it as a Space secret).
+   Never commit the key.
+3. `pip install -r requirements.txt` (or `pip install -e ".[app,web]"`).
+4. Check the key end to end without the RAG stack:
+   `python scripts/gnani_smoke.py --language en-IN` synthesizes a sentence with Timbre,
+   writes `results/gnani_smoke.wav`, then transcribes it back with Prisma. It prints
+   `skipped` and exits 0 when no key is set.
+5. Run the unit tests: `pytest tests/test_gnani_speech.py` (the live round-trip test runs
+   only when `GNANI_API_KEY` is set).
+
+Provider selection and fallback:
+
+- `HH_RAG_STT_PROVIDER=gnani` (default): Prisma transcribes every voice query. If Prisma
+  fails (outage, quota, auth, or a UI language it does not cover) and `SARVAM_API_KEY` is
+  set, the same clip is retried on Sarvam Saaras v3; the fallback is recorded in the STT
+  result's `events`. Bad audio is not retried. Without `GNANI_API_KEY` the pipeline uses
+  Sarvam alone.
+- `HH_RAG_STT_PROVIDER=sarvam`: the original Sarvam-only path.
+- `HH_RAG_TTS_PROVIDER=gnani` (default): when `GNANI_API_KEY` is set, `/health` reports
+  `tts_available: true` and the answer card shows a **Listen** button that calls
+  `POST /api/tts` (`{"text", "language_code"}` -> `audio/wav`). Citation markers are not
+  spoken. `off`, or no key, keeps the page text-only. TTS runs after the answer is shown
+  and is outside the 200 ms RAG latency budget.
+- Prisma REST and Timbre `timbre-v2.5` both cover 10 languages: `bn-IN en-IN gu-IN hi-IN
+  kn-IN ml-IN mr-IN pa-IN ta-IN te-IN`. Other UI languages fall back to Sarvam for STT and
+  have no read-aloud.
+
+## Pipeline (voice/text → grounded answer)
+
+```
+input → guardrails (unsafe/off-topic/filler) → BGE-M3 query embedding (~35 ms)
+      → language-partitioned FAISS HNSW search — every query hits its own
+        language partition; English has a dedicated `en` partition, and rare
+        UI languages (kok/ks/sd/mai) pivot to their closest available Indic
+        partition instead of leaking across scripts (~15 ms)
+      → evidence-sufficiency gate + unicode trigram hybrid rerank
+      → resident extractive fast tier (xlm-roberta-base-squad2-distilled,
+        verbatim span + citation, <150 ms) — single-token junk spans are
+        rejected by a structural guard
+      → if no confident span: show the closest retrieved passage with its
+        match strength (honest, never silent) instead of forcing slow
+        generative text
+      → grounding validation (schema, citation whitelist, answer–evidence
+        overlap) before anything reaches the user
+```
+
+Every response carries `route`, `reason_code`, per-stage latencies, retrieved
+evidence with citations, and the decision trace of every guardrail. The system
+answers only from retrieved context and refuses honestly otherwise:
+`INSUFFICIENT_CONTEXT` / `OFF_TOPIC` / `UNSAFE` are first-class outcomes.
+
+## Measured latency — extractive-only serving (30-query mixed battery)
+
+Every response completes inside the 200 ms budget. Grounded answers are
+resident verbatim spans + citations; everything else shows the closest
+retrieved passage with its match strength (honest, never silent). The
+generative chain (local Gemma-3-1B-it GGUF + Groq fallback) remains in the
+codebase and re-enables via `HH_RAG_FALLBACK=generative`.
+
+Server-side end-to-end (`total_latency_ms`, excludes client network RTT):
+
+| Percentile | All 30 queries |
+| --- | --- |
+| P50 | 95.9 ms |
+| P70 | 110.2 ms |
+| **P100** | **135.3 ms** |
+
+Zero requests exceeded 200 ms (min 31.7 ms, max 135.3 ms). Voice requests
+scope timing to the RAG pipeline (post-STT); network speech-to-text is
+reported separately in `stage_latencies_ms.stt`.
+Raw measurements: `results/latency_report.json`.
+
+Answer coverage is precision-first: when retrieval evidence cannot support a
+confident verbatim span, the system refuses rather than guessing - rule 6's
+"knows when not to answer" is implemented literally.
+
+## Resilience notes
+
+- In default `fast_tier_only` mode generative construction is skipped entirely
+  (no 800 MB GGUF load, no API clients) — boot is faster and request path has
+  no dead code. Set `HH_RAG_FALLBACK=generative` to re-enable the chain: local
+  Gemma-3-1B-it GGUF (GBNF grammar) → Groq fallback, with ZeroGPU circuit
+  breaker, cgroup-bounded llama.cpp threads (83 s → ~2 s warm-up), and
+  bounded HTTP clients so one slow provider cannot starve later requests.
+- Every harness exception is logged with full context; clients receive only a
+  structured `reason_code`.
+
+## Space variables and secrets
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GNANI_API_KEY` | secret | Gnani Prisma STT + Timbre TTS (`gnani-vachana`) |
+| `HH_RAG_STT_PROVIDER` | `gnani` | `gnani` (Sarvam fallback) or `sarvam` |
+| `HH_RAG_TTS_PROVIDER` | `gnani` | `gnani` enables the Listen button when a key is set; `off` disables it |
+| `GNANI_TTS_MODEL` / `GNANI_TTS_VOICE` / `GNANI_TTS_SPEED` | `timbre-v2.5` / `Kaveri` / `1.0` | Timbre model, voice, and speaking rate (0.85-1.15) |
+| `SARVAM_API_KEY` | secret | Sarvam STT fallback; the only STT provider when `GNANI_API_KEY` is unset |
+| `GROQ_API_KEY` | secret | Optional generative fallback (disabled in default extractive-only mode) |
+| `HH_RAG_FALLBACK` | `fast_tier_only` (set by wrapper) | `fast_tier_only` = extractive spans + closest-passage fallback, no generative calls; `generative` re-enables the full chain |
+| `HH_RAG_GENERATOR` | `resilient` | Ordered generation chain when fallback is `generative` |
+| `HH_RAG_GENERATION_CHAIN` | `local,groq` | Tier order when generative is enabled |
+| `HH_RAG_RESPONSE_CACHE` | `1` (set by wrapper) | LRU+TTL cache for repeated identical queries; hits are labeled `cache_hit` in metadata |
+| `HH_RAG_FAST_TIER_THRESHOLD` | `0.75` (wrapper) / `0.78` (Space var) | Global extractive confidence cutoff |
+| `HH_RAG_FAST_TIER_THRESHOLDS` | `{"en-IN": 0.88}` (Space var) | Per-language overrides |
+| `HH_RAG_GGUF_REPOSITORY` | `ggml-org/gemma-3-1b-it-GGUF` | Local SLM GGUF repository (used when generative is enabled) |
+| `HH_RAG_GGUF_FILENAME` | `gemma-3-1b-it-Q4_K_M.gguf` | Local SLM GGUF file |
+| `HH_RAG_LATENCY_TARGET_MS` | `200` | Target for `metadata.latency_budget` flagging (honest, never enforced by refusal) |
+| `HH_RAG_MAX_LATENCY_MS` | off | Strict deadline guard — set to `200` to refuse instead of answering over budget |
+
+The demo runs extractive-only by default for the strict <200 ms guarantee. Set `HH_RAG_FALLBACK=generative` to re-enable the full Gemma/Groq chain. Raw measurements: `results/latency_report.json`.
+
+---
+
+## Original GitHub Documentation (Preserved)
+
+The following sections are the original documentation retained for research reproducibility.
 
 ## Architecture
 
@@ -13,7 +149,7 @@ Voice
 → BGE-M3
 → FAISS HNSW
 → Evidence gate
-→ Qwen3.5 0.8B Q4_0 GGUF in ZeroGPU
+→ Groq openai/gpt-oss-20b
 → Grounding validation
 ```
 
@@ -40,13 +176,12 @@ for the complete runtime and trust boundaries.
 ## Run locally
 
 Prerequisites: Python 3.11–3.14, the frozen local artifacts referenced by
-`results/final_retriever_config.json`, and Sarvam credentials for STT. Answer generation uses the
-Qwen3.5 0.8B Q4_0 GGUF in the hosted ZeroGPU Space.
+`results/final_retriever_config.json`, Sarvam credentials for STT, and a Groq API key for answer generation.
 
 ```powershell
 python -m pip install -e ".[app,web]"
 Copy-Item .env.example .env
-# Edit .env and set SARVAM_API_KEY. Never commit this file.
+# Edit .env and set SARVAM_API_KEY and GROQ_API_KEY. Never commit this file.
 python -m uvicorn hh_goa_rag.web:app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
@@ -56,7 +191,7 @@ The health check is `GET /health`.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SARVAM_API_KEY` | required | Sarvam STT authentication |
-| `QWEN_GGUF_PATH` | Space-managed | Local path to the downloaded Qwen3.5 Q4_0 GGUF |
+| `GROQ_API_KEY` | required | Groq answer-generation authentication (`openai/gpt-oss-20b`) |
 | `HH_RAG_DEVICE` | `auto` | `auto`, `cpu`, or a CUDA device |
 | `HH_RAG_ENV_FILE` | `.env` | Local dotenv path |
 | `HH_RAG_RETRIEVER_CONFIG` | `results/final_retriever_config.json` | Frozen artifact manifest |
@@ -75,7 +210,7 @@ docker run --rm --env-file .env -p 8000:8000 anvaya-voice-rag:phase7
 ```
 
 Or use `docker compose up --build`. The container runs as a non-root user, has an application
-health check, is offline with respect to Hugging Face model resolution, and never copies `.env`.
+health check, is offline with respect to model resolution, and never copies `.env`.
 
 ## Retrieval ablations — measured
 
